@@ -10,7 +10,7 @@ export function pairUrl(server: string, token: string): string {
 
 const summary = (d: Device) => ({ device_id: d.device_id, name: d.name, platform: d.platform,
   user_auth_bound: d.user_auth_bound, security_level: d.security_level, paired_at: d.paired_at,
-  revoked_at: d.revoked_at, last_checkin_at: d.last_checkin_at });
+  revoked_at: d.revoked_at, last_checkin_at: d.last_checkin_at, push: d.push_token !== "" });
 
 // Owner-only socket for the `vouch` CLI.
 export function adminRoutes(app: FastifyInstance, { config, devices }: { config: Config; devices: Devices }): void {

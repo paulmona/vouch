@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vouch app API
-  version: 0.3.0
+  version: 0.4.0
   summary: The contract between the Vouch mobile app and the Vouch server.
   description: |
     The mobile app talks to the Vouch server over HTTPS (behind a reverse
@@ -697,7 +697,7 @@ components:
     PairRequest:
       type: object
       additionalProperties: false
-      required: [setup_token, public_key, attestation_chain, decision_key_proof, transport_public_key, push_token, name, platform]
+      required: [setup_token, public_key, attestation_chain, decision_key_proof, transport_public_key, name, platform]
       properties:
         setup_token: { type: string, minLength: 16, maxLength: 128 }
         public_key:
@@ -719,7 +719,15 @@ components:
           description: Optional Android attestation of the transport key (same rules as attestation_chain, no user-auth requirement). Omit or leave empty on iOS.
           maxItems: 10
           items: { type: string }
-        push_token: { type: string, minLength: 1, maxLength: 4096 }
+        push_token:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 4096
+          description: >-
+            The phone's Firebase push token. Leave the field out, or send null, when the app was built with no
+            Firebase config and so has none: the phone pairs and is never sent a push, and its owner opens the
+            app to see requests. An empty string is refused. A server older than API 0.4.0 refuses a pair request
+            without a token.
         name: { type: string, minLength: 1, maxLength: 64, examples: ["Pixel 9"] }
         platform: { $ref: "#/components/schemas/Platform" }
 
@@ -737,8 +745,9 @@ components:
         push_enabled:
           type: boolean
           description: >-
-            False when this server sends no push notifications (it has no Firebase
-            service account). The app then shows requests only when it is opened.
+            False when this phone is sent no push notifications: this server sends none (it has no
+            Firebase service account), or the phone gave no push token (an app built with no Firebase
+            config). The app then shows requests only when it is opened.
             Absent on servers older than this field: treat as true.
 
     Device:
@@ -764,8 +773,9 @@ components:
         push_enabled:
           type: boolean
           description: >-
-            False when this server sends no push notifications (it has no Firebase
-            service account). The app then shows requests only when it is opened.
+            False when this phone is sent no push notifications: this server sends none (it has no
+            Firebase service account), or the phone gave no push token (an app built with no Firebase
+            config). The app then shows requests only when it is opened.
             Absent on servers older than this field: treat as true.
 
     ApprovalRequest:

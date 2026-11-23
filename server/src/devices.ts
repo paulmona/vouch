@@ -13,6 +13,7 @@ export interface Device {
   platform: "android" | "ios";
   decision_key: string;
   transport_key: string;
+  // "" when the phone has none: a build of the app with no Firebase config. Never pushed to.
   push_token: string;
   user_auth_bound: UserAuthBound;
   security_level: "tee" | "strongbox" | null;
@@ -95,9 +96,9 @@ export class Devices {
     return d && !d.revoked_at ? d : undefined;
   }
 
-  // Paired devices whose push token Firebase has not rejected.
+  // Paired devices that have a push token, and Firebase has not rejected it.
   pushable(): Device[] {
-    return this.#db.prepare("SELECT * FROM devices WHERE revoked_at IS NULL AND push_token_invalid_at IS NULL")
+    return this.#db.prepare("SELECT * FROM devices WHERE revoked_at IS NULL AND push_token != '' AND push_token_invalid_at IS NULL")
       .all() as unknown as Device[];
   }
 
