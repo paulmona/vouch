@@ -152,7 +152,7 @@ export function appRoutes(app: FastifyInstance, { config, approvals, devices, he
     if (!d) return refuse(req, reply, 401, "invalid_setup_token", "This pairing code has expired or was already used. Make a new one.");
     return reply.code(201).send({ device_id: d.device_id, server_name: config.server.name,
       policy: { require_user_auth: config.policy.requireUserAuth }, user_auth_bound: d.user_auth_bound,
-      push_enabled: pushEnabled(config) });
+      push_enabled: pushEnabled(config) && d.push_token !== "" });
   });
 
   app.put<{ Body: { push_token: string } }>("/v1/devices/me/push-token", {
@@ -251,7 +251,7 @@ export function deviceView(d: Device, config: Config) {
   const require = config.policy.requireUserAuth;
   return { device_id: d.device_id, name: d.name, platform: d.platform, paired_at: d.paired_at,
     last_checkin_at: d.last_checkin_at, user_auth_bound: d.user_auth_bound, policy: { require_user_auth: require },
-    rekey_required: require && d.user_auth_bound === "none", push_enabled: pushEnabled(config) };
+    rekey_required: require && d.user_auth_bound === "none", push_enabled: pushEnabled(config) && d.push_token !== "" };
 }
 
 // Without a Firebase service account the server sends no notifications, and the app says so.

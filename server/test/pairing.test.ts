@@ -15,11 +15,11 @@ import { deviceKey, makeChain, signedHeaders, type KeyOpts } from "./helpers/att
 const lines: Record<string, unknown>[] = [];
 const log = createLogger("info", new Writable({ write(c, _e, done) { lines.push(JSON.parse(String(c))); done(); } }));
 
-function setup({ require = true, publicUrl = "https://vouch.example.com" } = {}) {
+function setup({ require = true, publicUrl = "https://vouch.example.com", firebase = false } = {}) {
   let now = Date.now();
   const db = openDb(":memory:");
   const devices = new Devices(db, log, () => now);
-  const config = parseConfig(`[server]\nname = "test-server"\n[app]\npublic_url = "${publicUrl}"\n[policy]\nrequire_user_auth = ${require}\n`);
+  const config = parseConfig(`[server]\nname = "test-server"\n[app]\npublic_url = "${publicUrl}"\n[policy]\nrequire_user_auth = ${require}\n${firebase ? '[firebase]\nservice_account_file = "/etc/vouch/firebase.json"\n' : ""}`);
   const roots: Buffer[] = [];
   const deps = { log, db, approvals: new Approvals(db, log), devices, roots };
   const app = buildListener("app", deps);
@@ -294,4 +294,17 @@ test("a null push token pairs the same way as none", async () => {
   assert.equal(r.statusCode, 201, r.body);
   assert.equal(s.devices.active(r.json().device_id)!.push_token, "");
   assert.deepEqual(s.devices.pushable(), []);
+});
+
+// push_enabled tells the app whether THIS phone will be sent notifications: the server must
+// be able to send them, and the phone must have given a token.
+test("on a server that sends push, a phone paired with no token is told it gets none", async () => {
+  const s = setup({ firebase: true });
+  const withToken = await pair(s, { token: await newToken(s) });
+  assert.equal(withToken.json().push_enabled, true, withToken.body);
+  for (const pushToken of ["absent", null] as const) {
+    const r = await pair(s, { token: await newToken(s), pushToken });
+    assert.equal(r.statusCode, 201, r.body);
+    assert.equal(r.json().push_enabled, false);
+  }
 });
