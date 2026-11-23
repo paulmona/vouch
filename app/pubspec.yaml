@@ -3,7 +3,7 @@ description: "Vouch by Viewbridge: approve an AI agent's request for access with
 publish_to: "none"
 
 # versionName+versionCode on Android. Bump both per release (tag app-vX.Y.Z).
-version: 0.1.12+1
+version: 0.1.13+1
 
 environment:
   sdk: ^3.12.2
