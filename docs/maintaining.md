@@ -135,6 +135,19 @@ step 2 are what hold.
     under Settings > Secrets and variables > Actions > Repository secrets,
     delete it there: a repository secret can be read by any workflow.
 
+    The iPhone build (`release-ios.yml`, to TestFlight) is optional and has
+    its own. Without them that job fails at its first signing step and the
+    Android release is not affected. Environment secrets:
+    `IOS_DIST_CERT_P12_B64`, `IOS_DIST_CERT_PASSWORD`, `IOS_PROFILE_B64`,
+    `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8_B64`. No Firebase config
+    here either. Environment variables, on the same page:
+    `VOUCH_DEVELOPMENT_TEAM` and `IOS_PROFILE_NAME`. Give the App
+    Store Connect key the App Manager role, not Admin: the job signs with
+    the certificate and profile you give it and never asks Apple to make
+    one, so its key only uploads. The certificate and the profile expire
+    after a year; renew them and store the new values. `app/README.md`
+    says how to make each.
+
 11. **The first releases.** See CI green on `main` before the first tag (step
     7). Before the first server tag, do the first part of step 12: an old
     `vouch-server` package must be gone before the release job pushes an

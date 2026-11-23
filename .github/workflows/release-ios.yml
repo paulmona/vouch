@@ -1,0 +1,187 @@
+# iPhone build of the Vouch app, uploaded to TestFlight.
+#
+# Tag `app-vX.Y.Z` on main -> the app is built on a hosted Mac, signed for the App
+# Store with a certificate and profile held in the `release` environment, and uploaded
+# to TestFlight by app/tool/testflight.sh. The tag must match `version:` in
+# app/pubspec.yaml; the build number is X*10000 + Y*100 + Z, as on Android, so each
+# version uploads once: running this again for the same tag is refused by Apple.
+#
+# Signing is manual. The job never passes -allowProvisioningUpdates, so the App Store
+# Connect key it holds only uploads: it needs the App Manager role, not Admin, and it
+# makes no certificate and no profile.
+#
+# The app is built with no Firebase config, as the published Android app is, so it gets
+# no push notifications. The script refuses to build where one exists.
+#
+# Secrets (set by the repo owner on the `release` environment, never committed, never
+# echoed): IOS_DIST_CERT_P12_B64, IOS_DIST_CERT_PASSWORD, IOS_PROFILE_B64, ASC_KEY_ID,
+# ASC_ISSUER_ID and ASC_KEY_P8_B64. Variables on the same environment:
+# VOUCH_DEVELOPMENT_TEAM and IOS_PROFILE_NAME. No other workflow is given them. See
+# app/README.md "iPhone releases (TestFlight)".
+name: release-ios
+
+on:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_CHANNEL: stable
+  # The same Flutter as release-app.yml: one version of the app is one toolchain.
+  FLUTTER_VERSION: "3.44.2"
+  # The runner label picks a family of Xcode, not one build, and its default moves.
+  # The job selects this one and stops if the image no longer carries it.
+  XCODE_APP: /Applications/Xcode_27.2.app
+  XCODE_BUILD: 27B52
+
+jobs:
+  testflight:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    # A repository setting, not this file, decides who may run this job: the `release`
+    # environment's reviewers and tag rules apply even to a tag whose workflow was edited.
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      # Fails closed. Only the `release` environment, set up as docs/maintaining.md says,
+      # holds this variable. If the environment is missing GitHub makes an empty one when a
+      # tag is pushed, with no reviewer and no tag rule.
+      - name: The release environment is set up
+        env:
+          READY: ${{ vars.RELEASE_ENV_READY }}
+        run: |
+          [ "$READY" = "true" ] || { echo "::error::The release environment is not set up (RELEASE_ENV_READY is not true). See docs/maintaining.md."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Version from the tag
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#app-v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' is not app-vX.Y.Z"; exit 1
+          fi
+          PUB=$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' app/pubspec.yaml)
+          if [ "$PUB" != "$VER" ]; then
+            echo "::error::tag version $VER does not match app/pubspec.yaml version $PUB"; exit 1
+          fi
+          # Before any step that is handed the signing key: only a commit that went through
+          # review on main gets a signed build.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$TAG is not on main"; exit 1; }
+          echo "Vouch app $VER at $(git rev-parse --short=7 HEAD)"
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          [ -d "$XCODE_APP" ] || { echo "::error::$XCODE_APP is not on this runner image. Change XCODE_APP and XCODE_BUILD together, on purpose."; exit 1; }
+          sudo xcode-select -s "$XCODE_APP"
+          have=$(xcodebuild -version | sed -n 's/^Build version //p')
+          [ "$have" = "$XCODE_BUILD" ] || { echo "::error::Xcode build $have, expected $XCODE_BUILD"; exit 1; }
+          xcodebuild -version
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      # Before the signing key is on the runner: what is signed has passed the app's own checks.
+      - name: Analyze and tests
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      # Everything is decoded into the runner's temp directory or the places Xcode reads,
+      # mode 600, never printed. The keychain is new, has a password made here, and is
+      # deleted by the last step whatever happens in between.
+      - name: Materialise the certificate, profile and upload key
+        env:
+          IOS_DIST_CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12_B64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROFILE_B64: ${{ secrets.IOS_PROFILE_B64 }}
+          ASC_KEY_P8_B64: ${{ secrets.ASC_KEY_P8_B64 }}
+          IOS_PROFILE_NAME: ${{ vars.IOS_PROFILE_NAME }}
+        run: |
+          set -euo pipefail
+          : "${IOS_DIST_CERT_P12_B64:?secret IOS_DIST_CERT_P12_B64 is not set}"
+          : "${IOS_DIST_CERT_PASSWORD:?secret IOS_DIST_CERT_PASSWORD is not set}"
+          : "${IOS_PROFILE_B64:?secret IOS_PROFILE_B64 is not set}"
+          : "${ASC_KEY_P8_B64:?secret ASC_KEY_P8_B64 is not set}"
+          : "${IOS_PROFILE_NAME:?variable IOS_PROFILE_NAME is not set on the release environment}"
+          umask 077
+          printf '%s' "$IOS_DIST_CERT_P12_B64" | base64 -d > "$RUNNER_TEMP"/dist.p12
+          printf '%s' "$IOS_PROFILE_B64" | base64 -d > "$RUNNER_TEMP"/vouch.mobileprovision
+          printf '%s' "$ASC_KEY_P8_B64" | base64 -d > "$RUNNER_TEMP"/AuthKey.p8
+
+          # The profile must be the one the build will ask for by name.
+          security cms -D -i "$RUNNER_TEMP"/vouch.mobileprovision > "$RUNNER_TEMP"/profile.plist
+          name=$(plutil -extract Name raw "$RUNNER_TEMP"/profile.plist)
+          uuid=$(plutil -extract UUID raw "$RUNNER_TEMP"/profile.plist)
+          [ "$name" = "$IOS_PROFILE_NAME" ] || { echo "::error::the profile in IOS_PROFILE_B64 is named '$name', and IOS_PROFILE_NAME is '$IOS_PROFILE_NAME'"; exit 1; }
+          echo "profile '$name' ($uuid), expires $(plutil -extract ExpirationDate raw "$RUNNER_TEMP"/profile.plist)"
+          # Xcode 16 and later read the first folder, older ones the second.
+          for dir in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" "$HOME/Library/MobileDevice/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$RUNNER_TEMP"/vouch.mobileprovision "$dir/$uuid.mobileprovision"
+          done
+          echo "IOS_PROFILE_UUID=$uuid" >> "$GITHUB_ENV"
+
+          keychain="$RUNNER_TEMP"/vouch-signing.keychain-db
+          kpw=$(openssl rand -hex 24)
+          security list-keychains -d user | sed -e 's/^ *"//' -e 's/"$//' > "$RUNNER_TEMP"/keychains.before
+          security create-keychain -p "$kpw" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$kpw" "$keychain"
+          security import "$RUNNER_TEMP"/dist.p12 -k "$keychain" -f pkcs12 -P "$IOS_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security > /dev/null
+          # Without this codesign stops to ask a person for the keychain password.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpw" "$keychain" > /dev/null
+          before=()
+          while IFS= read -r k; do [ -n "$k" ] && before+=("$k"); done < "$RUNNER_TEMP"/keychains.before
+          security list-keychains -d user -s "$keychain" ${before[@]+"${before[@]}"}
+          security find-identity -v -p codesigning "$keychain" | sed -n 's/^ *[0-9]*) \([0-9A-F]*\) "\(Apple Distribution\)[^"]*"$/signing identity \2, SHA-1 \1/p'
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Build, sign and upload to TestFlight
+        env:
+          VOUCH_DEVELOPMENT_TEAM: ${{ vars.VOUCH_DEVELOPMENT_TEAM }}
+          IOS_PROFILE_NAME: ${{ vars.IOS_PROFILE_NAME }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          : "${VOUCH_DEVELOPMENT_TEAM:?variable VOUCH_DEVELOPMENT_TEAM is not set on the release environment}"
+          : "${ASC_KEY_ID:?secret ASC_KEY_ID is not set}" "${ASC_ISSUER_ID:?secret ASC_ISSUER_ID is not set}"
+          app/tool/testflight.sh --ci
+
+      # Whatever happened above. The runner is thrown away after the job, and this does not
+      # rely on that.
+      - name: Remove the keychain and everything that was decoded
+        if: always()
+        run: |
+          set -u
+          keychain="$RUNNER_TEMP"/vouch-signing.keychain-db
+          if [ -f "$RUNNER_TEMP"/keychains.before ]; then
+            before=()
+            while IFS= read -r k; do [ -n "$k" ] && before+=("$k"); done < "$RUNNER_TEMP"/keychains.before
+            security list-keychains -d user -s ${before[@]+"${before[@]}"} || true
+          fi
+          security delete-keychain "$keychain" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP"/dist.p12 "$RUNNER_TEMP"/vouch.mobileprovision "$RUNNER_TEMP"/profile.plist "$RUNNER_TEMP"/AuthKey.p8 "$RUNNER_TEMP"/keychains.before
+          rm -f app/ios/Flutter/VouchLocal.xcconfig
+          if [ -n "${IOS_PROFILE_UUID:-}" ]; then
+            rm -f "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$IOS_PROFILE_UUID.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$IOS_PROFILE_UUID.mobileprovision"
+          fi
+          ! security find-identity -v -p codesigning | grep -q "Apple Distribution" || { echo "::error::a distribution identity is still in a keychain"; exit 1; }
