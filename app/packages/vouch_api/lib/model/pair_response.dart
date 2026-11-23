@@ -29,7 +29,7 @@ class PairResponse {
   /// What the server knows about whether the decision key needs a fingerprint, face or PIN for every use.
   PairResponseUserAuthBoundEnum userAuthBound;
 
-  /// False when this server sends no push notifications (it has no Firebase service account). The app then shows requests only when it is opened. Absent on servers older than this field: treat as true.
+  /// False when this phone is sent no push notifications: this server sends none (it has no Firebase service account), or the phone gave no push token (an app built with no Firebase config). The app then shows requests only when it is opened. Absent on servers older than this field: treat as true.
   ///
   /// Please note: This property should have been non-nullable! Since the specification file
   /// does not include a default value (using the "default:" property), however, the generated
