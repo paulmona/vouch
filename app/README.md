@@ -27,10 +27,15 @@ the gitignored `android/vouch.properties`. The Firebase files
 are gitignored too. Android builds and runs without its file, with no push;
 the iOS build needs its file.
 
-Release builds (`release-app.yml`, on `app-v*` tags) take the Android file
-from the `GOOGLE_SERVICES_JSON_B64` Actions secret
-(`base64 < google-services.json`), set on the `release` environment. CI on
-pull requests does not build an APK; it runs format, analyze and tests.
+The published APK (`release-app.yml`, on `app-v*` tags) is built with no
+Firebase config, so it gets no push notifications: its owner opens Vouch to
+see requests. There is no shared push relay, and an app that carried the
+publisher's config would register every phone that installs it with the
+publisher's Firebase project. The release job refuses to build where the
+file exists and checks the finished APK for one. For push, build the app
+yourself with your own Firebase project
+([docs/building-the-app.md](../docs/building-the-app.md)). CI on pull
+requests does not build an APK; it runs format, analyze and tests.
 
 ### Notes
 
@@ -242,7 +247,6 @@ gh secret set --env release ANDROID_UPLOAD_KEYSTORE_B64 --body "$(base64 -i ~/vo
 gh secret set --env release ANDROID_KEYSTORE_PASSWORD     # prompts
 gh secret set --env release ANDROID_KEY_ALIAS --body vouch-upload
 gh secret set --env release ANDROID_KEY_PASSWORD          # prompts (same as the store password)
-gh secret set --env release GOOGLE_SERVICES_JSON_B64 --body "$(base64 -i android/app/google-services.json)"
 ```
 
 To cut a release, bump `version:` in `pubspec.yaml` on main, then tag

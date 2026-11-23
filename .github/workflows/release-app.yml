@@ -6,10 +6,14 @@
 # `version:` in app/pubspec.yaml; versionCode is X*10000 + Y*100 + Z so it
 # always rises with the version.
 #
+# The APK is built with no Firebase config, so it gets no push notifications: there is
+# no shared push relay, and a published app must not register phones with the
+# publisher's Firebase project. Push needs your own build (docs/building-the-app.md).
+#
 # Secrets (set by the repo owner on the `release` environment, never committed, never
-# echoed): ANDROID_UPLOAD_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
-# ANDROID_KEY_PASSWORD and GOOGLE_SERVICES_JSON_B64 (`base64 < google-services.json`).
-# No other workflow is given them. See app/README.md "Releases".
+# echoed): ANDROID_UPLOAD_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS
+# and ANDROID_KEY_PASSWORD. No other workflow is given them. See app/README.md
+# "Releases".
 name: release-app
 
 on:
@@ -97,18 +101,21 @@ jobs:
           flutter analyze
           flutter test
 
+      # The file is ignored by git, so it cannot come from the tag. This is for a workflow
+      # that someone changes to write one: the build would pick it up without a word.
+      - name: No Firebase config in the tree
+        run: |
+          [ ! -e app/android/app/google-services.json ] || { echo "::error::app/android/app/google-services.json exists. A published APK is built with no Firebase config."; exit 1; }
+
       # Decoded into the runner's temp directory, mode 600, never printed.
-      - name: Materialise the keystore and Firebase config
+      - name: Materialise the keystore
         env:
           ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
-          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
         run: |
           set -euo pipefail
           : "${ANDROID_UPLOAD_KEYSTORE_B64:?secret ANDROID_UPLOAD_KEYSTORE_B64 is not set}"
-          : "${GOOGLE_SERVICES_JSON_B64:?secret GOOGLE_SERVICES_JSON_B64 is not set}"
           umask 077
           printf '%s' "$ANDROID_UPLOAD_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
-          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/android/app/google-services.json
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
 
       - name: Build the signed release APK
@@ -162,6 +169,23 @@ jobs:
           echo "cert_sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "Signing certificate SHA-256: $SHA"
 
+      # The google-services plugin turns a Firebase config into these string resources,
+      # and Firebase finds them by name. None of them may be in what is published.
+      - name: Verify the APK carries no Firebase config
+        run: |
+          set -euo pipefail
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/aapt2" dump resources "$APK" > /tmp/resources.txt
+          [ -s /tmp/resources.txt ] || { echo "::error::aapt2 listed no resources in the APK"; exit 1; }
+          if grep -nE 'google_app_id|gcm_defaultSenderId|google_api_key' /tmp/resources.txt; then
+            echo "::error::the release APK carries a Firebase config (see above)"; exit 1
+          fi
+          # The same thing from the build's side: the plugin writes its values here when it runs.
+          made=$(find app/build -type f -path '*oogle*ervices*' -name 'values.xml' -print -quit)
+          [ -z "$made" ] || { echo "::error::the google-services plugin ran in this build ($made)"; exit 1; }
+          echo "No Firebase config in the APK."
+
       - name: Package
         env:
           VER: ${{ steps.ver.outputs.version }}
@@ -189,6 +213,8 @@ jobs:
             echo "Signing certificate SHA-256: \`$CERT\`"
             echo
             echo "Check before installing: \`sha256sum -c vouch-$VER.apk.sha256\`."
+            echo
+            echo "This APK is built with no Firebase config, so it gets no push notifications: open Vouch to see requests. For push, build the app with your own Firebase project (docs/building-the-app.md)."
             echo
             if [ -n "$PREV" ]; then echo "## Changes since $PREV"; else echo "## Changes"; fi
             echo

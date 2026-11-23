@@ -110,8 +110,8 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
-// google-services.json is never committed (it comes from the Firebase console
-// locally and from the GOOGLE_SERVICES_JSON_B64 secret in CI). The plugin
+// google-services.json is never committed: it comes from the Firebase console,
+// for your own build. The published APK is built without it. The plugin
 // fails the build when the file is missing, so apply it only when present:
 // the app still builds and runs without Firebase until pairing needs a push
 // token.

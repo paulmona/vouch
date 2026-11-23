@@ -69,7 +69,7 @@ test("every release job stops first unless the release environment has been set 
   const said = readFileSync(guide, "utf8").replace(/\s+/g, " ");
   for (const must of ["`RELEASE_ENV_READY`", "before you store any secret and before you push any tag", "Required reviewers",
     "`server-v*`", "`broker-v*`", "`app-v*`", "ANDROID_UPLOAD_KEYSTORE_B64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS",
-    "ANDROID_KEY_PASSWORD", "GOOGLE_SERVICES_JSON_B64", "Private vulnerability reporting", "Push protection", "Immutable releases",
+    "ANDROID_KEY_PASSWORD", "Private vulnerability reporting", "Push protection", "Immutable releases",
     "`api-breaking`", "Run workflow", "before the first tag", "on a private one only on some paid plans", "nobody is asked first", "settings are not copied"]) {
     assert.ok(said.includes(must), `docs/maintaining.md does not say: ${must}`);
   }
@@ -84,4 +84,30 @@ test("the app release analyzes and tests the app before the signing key is on th
   assert.notEqual(tests, -1, "release-app.yml does not run flutter analyze and flutter test");
   assert.ok(tests < secret, "the app's tests run after a secret is used");
   assert.doesNotMatch(all[tests]!, /^\s+(if|continue-on-error):/m);
+});
+
+// There is no shared push relay: each installation pushes through its own Firebase project.
+// A published app that carried the publisher's Firebase config would register every
+// phone that installs it with the publisher's project. So the release is built with no
+// Firebase config, and the finished APK is checked for one.
+test("the published Android app is built without a Firebase config, and the APK is checked for one", (t) => {
+  if (!existsSync(DIR)) return t.skip("not a full checkout");
+  const text = readFileSync(new URL("release-app.yml", DIR), "utf8");
+  const code = text.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  const all = steps(text.slice(text.search(/^jobs:\s*$/m)));
+  assert.doesNotMatch(text, /GOOGLE_SERVICES_JSON_B64/, "release-app.yml still names the Firebase secret");
+  assert.doesNotMatch(code, />\s*app\/android\/app\/google-services\.json/, "release-app.yml writes a Firebase config");
+  const refuse = all.findIndex((s) => /\[ ! -e app\/android\/app\/google-services\.json \] \|\| \{[^}]*exit 1; \}/.test(s));
+  const build = all.findIndex((s) => /flutter build apk --release/.test(s));
+  const verify = all.findIndex((s) => /aapt2" dump resources/.test(s) && /google_app_id\|gcm_defaultSenderId\|google_api_key/.test(s) && /exit 1/.test(s));
+  const publish = all.findIndex((s) => /gh release create/.test(s));
+  assert.notEqual(refuse, -1, "nothing refuses a Firebase config that is already in the tree");
+  assert.notEqual(verify, -1, "the APK is not checked for a Firebase config");
+  assert.ok(refuse < build && build < verify && verify < publish, "the steps are out of order: refuse, build, check the APK, publish");
+  for (const i of [refuse, verify]) assert.doesNotMatch(all[i]!, /^\s+(if|continue-on-error):/m, "a Firebase check can be skipped");
+  for (const [file, must] of [["docs/maintaining.md", "built with no Firebase config"], ["app/README.md", "built with no Firebase config"]] as const) {
+    const said = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").replace(/\s+/g, " ");
+    assert.ok(said.includes(must), `${file} does not say: ${must}`);
+    assert.ok(!said.includes("GOOGLE_SERVICES_JSON_B64"), `${file} still names the Firebase secret`);
+  }
 });
