@@ -1,6 +1,6 @@
 {
   "name": "vouch-approver",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "description": "Vouch approver service: paired devices, pending approvals, push.",
   "license": "Apache-2.0",
