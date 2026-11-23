@@ -24,8 +24,8 @@ The identity settings live in `ios/Flutter/Vouch.xcconfig` (override them in
 the gitignored `VouchLocal.xcconfig`, which must set your Apple team id) and
 the gitignored `android/vouch.properties`. The Firebase files
 (`android/app/google-services.json`, `ios/Runner/GoogleService-Info.plist`)
-are gitignored too. Android builds and runs without its file, with no push;
-the iOS build needs its file.
+are gitignored too. Both apps build and run without their file, with no
+push.
 
 The published APK (`release-app.yml`, on `app-v*` tags) is built with no
 Firebase config, so it gets no push notifications: its owner opens Vouch to
@@ -258,10 +258,14 @@ local testing.
 ## iPhone releases (TestFlight)
 
 `tool/testflight.sh` builds the app at an `app-vX.Y.Z` tag, signs it for
-the App Store and uploads it to TestFlight. It runs on a Mac and signs with
-an App Store Connect API key kept on that Mac, never in the repo or CI. The
-build number is `X*10000 + Y*100 + Z`, as on Android, so each version
-uploads once.
+the App Store and uploads it to TestFlight. The build number is
+`X*10000 + Y*100 + Z`, as on Android, so each version uploads once. There
+are two ways to run it: on your own Mac, below, or from the release
+workflow (see "From the release workflow" after the one-time setup).
+
+On a Mac it signs with an App Store Connect API key kept on that Mac, never
+in the repo. That key has the Admin role, because Xcode makes the
+certificate and the profile for you. It is not the key the workflow uses.
 
 ```sh
 git checkout app-vX.Y.Z   # the release tag to build
@@ -269,7 +273,10 @@ app/tool/testflight.sh             # or --dry-run: sign, don't upload
 ```
 
 It uses the same local files as any build: `VouchLocal.xcconfig` (bundle
-id and team) and `GoogleService-Info.plist`.
+id and team) and `GoogleService-Info.plist`. A build made this way carries
+your Firebase config, so everyone you give it to through TestFlight
+registers with your Firebase project. Use it for your own phones. A build
+for other people comes from the release workflow, which carries none.
 
 One-time setup, by the account holder:
 
@@ -299,6 +306,56 @@ or a public link) needs the first build of each version to pass Beta App
 Review. The reviewer can't pair without a server, so give them a way in
 under Test Information > Review Notes, for example a pairing code for a
 demo server that stays open during review.
+
+### From the release workflow
+
+`.github/workflows/release-ios.yml` runs the same script with `--ci` on a
+hosted Mac when an `app-vX.Y.Z` tag is pushed, in the `release` environment,
+so it waits for the same approval as the Android release. It is separate
+from the Android workflow: one can fail without the other.
+
+The app it uploads is built with no Firebase config, like the published
+Android app, so it gets no push notifications: the script refuses to run
+with `--ci` where `ios/Runner/GoogleService-Info.plist` exists, and stops
+if the built app holds one.
+
+There the signing is manual. The job is given a certificate and a profile,
+and never asks Apple to make either, so its App Store Connect key only
+uploads and does not need the Admin role. Make these once, and again when
+they expire (a distribution certificate and its profile last a year):
+
+1. **A distribution certificate.** In Keychain Access, Certificate
+   Assistant > Request a Certificate From a Certificate Authority, saved to
+   disk. In the [developer account](https://developer.apple.com/account),
+   Certificates > + > Apple Distribution, upload the request, download the
+   certificate and open it. In Keychain Access, export the certificate
+   with its private key as a `.p12`, with a password.
+2. **An App Store profile.** Profiles > + > App Store Connect, your bundle
+   id, the certificate from step 1. Give it a name you will recognise and
+   download the `.mobileprovision`.
+3. **An upload key.** In App Store Connect, Users and Access >
+   Integrations > App Store Connect API > Team Keys > +, role **App
+   Manager**. Download the `.p8` (once only).
+
+Store them on the `release` environment, never as repository secrets and
+never in the tree (`docs/maintaining.md`, step 10):
+
+```sh
+gh secret set --env release IOS_DIST_CERT_P12_B64 --body "$(base64 -i dist.p12)"
+gh secret set --env release IOS_DIST_CERT_PASSWORD        # prompts
+gh secret set --env release IOS_PROFILE_B64 --body "$(base64 -i vouch.mobileprovision)"
+gh secret set --env release ASC_KEY_ID                    # prompts
+gh secret set --env release ASC_ISSUER_ID                 # prompts
+gh secret set --env release ASC_KEY_P8_B64 --body "$(base64 -i AuthKey_XXXXXXXXXX.p8)"
+gh variable set --env release VOUCH_DEVELOPMENT_TEAM --body <your team id>
+gh variable set --env release IOS_PROFILE_NAME --body "<the profile's name>"
+```
+
+The job stops before it builds if the profile's name is not
+`IOS_PROFILE_NAME`. It uses one Xcode build, named at the top of the
+workflow, and stops if the runner no longer has it. Pushing a tag whose
+version is already in TestFlight fails at the upload: Apple takes each
+build number once.
 
 ## Design system
 

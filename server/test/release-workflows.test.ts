@@ -111,3 +111,43 @@ test("the published Android app is built without a Firebase config, and the APK 
     assert.ok(!said.includes("GOOGLE_SERVICES_JSON_B64"), `${file} still names the Firebase secret`);
   }
 });
+
+// The iPhone build is signed on a hosted Mac with a certificate and an upload key held in
+// the `release` environment. The key must not be able to make anything in the Apple
+// account, what signs must leave the runner, and the build must be the one that was tested.
+test("the iPhone release tests first, signs with what it was given, and cleans up", (t) => {
+  if (!existsSync(DIR)) return t.skip("not a full checkout");
+  const file = new URL("release-ios.yml", DIR);
+  assert.ok(existsSync(file), "release-ios.yml is missing");
+  const text = readFileSync(file, "utf8");
+  const code = text.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  const all = steps(text.slice(text.search(/^jobs:\s*$/m)));
+  assert.match(code, /^on:\n {2}push:\n {4}tags: \["app-v\*"\]$/m, "it does not run on app-v* tags only");
+  assert.doesNotMatch(code, /contents: write/, "it can write to the repository");
+  assert.doesNotMatch(code, /allowProvisioningUpdates/, "it lets Xcode create certificates or profiles");
+  assert.doesNotMatch(code, /\bcache(-[\w-]+)?: /, "it restores a cache into a job that signs");
+  for (const uses of code.matchAll(/uses: (\S+)/g)) assert.match(uses[1]!, /@[0-9a-f]{40}$/, `${uses[1]} is not pinned to a commit`);
+
+  const secret = all.findIndex((s) => /\$\{\{\s*secrets\./.test(s));
+  const tests = all.findIndex((s) => /^\s+flutter analyze$/m.test(s) && /^\s+flutter test$/m.test(s));
+  const xcode = all.findIndex((s) => /xcode-select -s "\$XCODE_APP"/.test(s) && /\[ "\$have" = "\$XCODE_BUILD" \] \|\|/.test(s));
+  const build = all.findIndex((s) => /app\/tool\/testflight\.sh --ci/.test(s));
+  const clean = all.findIndex((s) => /^\s*if: always\(\)$/m.test(s) && /security delete-keychain/.test(s));
+  assert.notEqual(tests, -1, "it does not run flutter analyze and flutter test");
+  assert.notEqual(xcode, -1, "it does not select one Xcode and stop when the image has another");
+  assert.notEqual(build, -1, "it does not build with app/tool/testflight.sh --ci");
+  assert.notEqual(clean, -1, "no step that always runs deletes the keychain");
+  assert.ok(xcode < tests && tests < secret && secret < build && build < clean, "the steps are out of order: Xcode, tests, secrets, build, clean up");
+  assert.doesNotMatch(all[tests]!, /^\s+(if|continue-on-error):/m);
+  for (const gone of ['rm -f "$RUNNER_TEMP"/dist.p12', "AuthKey.p8", "VouchLocal.xcconfig", 'security list-keychains -d user -s']) {
+    assert.ok(all[clean]!.includes(gone), `the clean-up step does not deal with: ${gone}`);
+  }
+  // A published app carries no Firebase config (see the Android test above): the job is given none and writes none.
+  assert.doesNotMatch(text, /GoogleService-Info|GOOGLE_SERVICE/i, "release-ios.yml names a Firebase config");
+  for (const name of ["IOS_DIST_CERT_P12_B64", "IOS_DIST_CERT_PASSWORD", "IOS_PROFILE_B64", "ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8_B64"]) {
+    assert.match(code, new RegExp(`\\$\\{\\{ secrets\\.${name} \\}\\}`), `it does not read the secret ${name}`);
+    assert.ok(readFileSync(new URL("../../docs/maintaining.md", import.meta.url), "utf8").includes(name), `docs/maintaining.md does not name ${name}`);
+  }
+  // A secret is handed to a step through its environment, never written into a command.
+  for (const s of all) assert.doesNotMatch(s.slice(s.search(/^\s+run: /m)), /\$\{\{\s*secrets\./, "a secret is written into a script");
+});
