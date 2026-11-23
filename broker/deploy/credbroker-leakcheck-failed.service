@@ -1,0 +1,13 @@
+[Unit]
+Description=Credential broker: tell the owner's phones the daily leak check failed or was stopped
+# Started by OnFailure= in credbroker-leakcheck.service, never on its own.
+
+[Service]
+Type=oneshot
+# -I -S: the standard library only. The script uses nothing from the broker's
+# packages, so it still runs when those are what broke the check.
+ExecStart=/opt/credbroker/current/venv/bin/python -I -S /opt/credbroker/current/deploy/leakcheck-failed.py
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+TimeoutStartSec=1min

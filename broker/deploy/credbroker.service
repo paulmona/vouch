@@ -1,0 +1,41 @@
+# credbroker, the credential broker. Installed by deploy/install.sh <tag>.
+# Users: `credbroker` runs the service. Group `credbroker-clients` holds the
+# agents allowed to connect to broker.sock. Group `vouch-broker` is Vouch's: it
+# lets the broker open Vouch's socket, and must exist before this unit starts.
+[Unit]
+Description=Credential broker for AI agents
+# Ordering only: a restart of Vouch must not stop the broker.
+After=network-online.target vouch.service
+Wants=network-online.target
+
+[Service]
+User=credbroker
+Group=credbroker
+SupplementaryGroups=credbroker-clients vouch-broker
+# Secrets (each agent's 1Password token) come from /etc/credbroker/secrets.env.
+# To take them from HashiCorp Vault instead, see deploy/vault/README.md.
+ExecStart=/opt/credbroker/current/venv/bin/credbroker-server
+Restart=on-failure
+RestartSec=10
+
+RuntimeDirectory=credbroker
+RuntimeDirectoryMode=0755
+StateDirectory=credbroker
+StateDirectoryMode=0750
+UMask=0077
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

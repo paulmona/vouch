@@ -1,0 +1,34 @@
+{
+  "name": "vouch-approver",
+  "version": "0.3.10",
+  "private": true,
+  "description": "Vouch approver service: paired devices, pending approvals, push.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "vouch": "node src/cli.ts",
+    "fake-device": "node tools/fake-device.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "fastify": "5.12.8",
+    "mqtt": "5.16.1",
+    "pino": "10.4.0",
+    "smol-toml": "1.9.1",
+    "uqr": "0.1.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "aedes": "1.2.0",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1"
+  }
+}

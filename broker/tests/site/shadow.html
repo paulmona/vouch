@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Shadow DOM login</title></head>
+<body>
+<!-- Inputs inside open shadow roots, like one large shop's custom text input; the password is two roots deep. -->
+<x-field id="e" kind="email" name="email"></x-field>
+<x-form><template shadowrootmode="open"><x-field kind="password" name="password"></x-field></template></x-form>
+<script>
+  customElements.define('x-field', class extends HTMLElement {
+    connectedCallback() {
+      this.attachShadow({mode: 'open'}).innerHTML =
+        `<input type="${this.getAttribute('kind')}" name="${this.getAttribute('name')}">`;
+    }
+  });
+</script>
+</body></html>

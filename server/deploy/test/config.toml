@@ -1,0 +1,33 @@
+# A second, test instance, for trying the app or a change. Installed once by
+# deploy/install.sh test <tag>; later installs leave it alone. Not connected to a
+# broker; `vouch-test send-test-request` stands in for it.
+
+[server]
+name = "test"
+
+[policy]
+# Turn off only to pair the fake device (software keys); never on an instance
+# that agents use.
+require_user_auth = true
+
+[app]
+# This machine only. To reach it from a phone on your network, use "0.0.0.0"
+# and set public_url to http://, this machine's address on your network, and :8771
+host = "127.0.0.1"
+port = 8771
+public_url = ""
+
+[sockets]
+broker = "/run/vouch-test/broker.sock"
+broker_group = ""
+admin = "/run/vouch-test/admin.sock"
+
+[store]
+path = "/var/lib/vouch-test/vouch.db"
+
+[firebase]
+# No push yet: the app refreshes by hand.
+service_account_file = ""
+
+[log]
+level = "info"

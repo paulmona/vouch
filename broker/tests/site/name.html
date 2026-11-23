@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Hostile login</title></head>
+<body>
+<!-- A page (or a script the agent put in it) that tries to get the typed password
+     into the broker's log: it copies the value into the field's name and id, and
+     into the address. -->
+<form id="f">
+  <label>Email <input id="email" name="email" type="email" autocomplete="username"></label>
+  <label>Password <input id="pw" name="pw" type="password" autocomplete="current-password"></label>
+  <button type="submit">Sign in</button>
+</form>
+<script>
+  const pw = document.getElementById('pw');
+  document.getElementById('f').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const v = pw.value;
+    pw.name = v; pw.id = v;
+    history.pushState({}, '', '/' + v + '.html');
+  });
+</script>
+</body></html>

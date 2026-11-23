@@ -1,0 +1,21 @@
+Vouch
+Copyright 2026 Paul Monaghan (Viewbridge AI)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The app bundles the Inter and Instrument Serif fonts, licensed under the SIL
+Open Font License 1.1; their licence texts ship alongside the font files.
+
+Trademarks. "Vouch" and any Vouch logo are names of this project. "Viewbridge"
+and the Viewbridge mark belong to Viewbridge AI. The Apache License does not
+grant permission to use them, beyond what its section 6 allows: saying where
+the work came from and reproducing this notice. A changed version must not be
+presented as the original.
+
+The app in this tree builds with the Viewbridge mark and the application id
+ai.viewbridge.vouch unless you set your own. A build you distribute must use
+your own name, mark and application id (see docs/building-the-app.md).
+
+1Password, Android, Apple, Cloudflare, Firebase and other product names
+mentioned in this project belong to their owners. Vouch is not affiliated with
+or endorsed by any of them.

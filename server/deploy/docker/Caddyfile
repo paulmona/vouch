@@ -1,0 +1,11 @@
+# HTTPS in front of Vouch. Caddy gets a certificate for VOUCH_DOMAIN
+# automatically when that name points at this machine and port 443 (and 80, for
+# the ACME challenge) is reachable, or set up a DNS challenge instead.
+#
+# Caddy sets X-Forwarded-For to the address it saw and drops any value the
+# client sent (it trusts no proxies in front of it), which is what Vouch's
+# per-address rate limit relies on. If you put another proxy in front of Caddy,
+# configure Caddy's trusted_proxies for it.
+{$VOUCH_DOMAIN} {
+	reverse_proxy vouch:8770
+}

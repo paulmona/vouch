@@ -1,0 +1,39 @@
+# Vouch config for Docker (deploy/docker/compose.yaml mounts it at
+# /etc/vouch/config.toml). Every key is documented in config.example.toml.
+
+[server]
+# Shown in the app after pairing.
+# name = "home-server"
+
+[policy]
+require_user_auth = true
+
+[app]
+# Inside the container: listen on all interfaces; compose decides who can reach it.
+host = "0.0.0.0"
+port = 8770
+# The address phones use, scheme and host only. Required for `vouch setup-code`.
+public_url = "https://vouch.example.com"
+# Proxies allowed to report the client address (X-Forwarded-For): only the
+# bundled Caddy, at the fixed address compose.yaml gives it. Nothing else is
+# trusted, so a client can't pose as another address to the rate limits. If your
+# own proxy or cloudflared sits in front instead, put its address here.
+trusted_proxies = ["10.87.70.2"]
+
+[sockets]
+broker = "/run/vouch/broker.sock"
+# A numeric group id lets a broker outside the container connect: give that
+# host group id here, and add it to the container with group_add in compose.
+# Empty means owner-only (uid 10001).
+broker_group = ""
+admin = "/run/vouch/admin.sock"
+
+[store]
+path = "/var/lib/vouch/vouch.db"
+
+[firebase]
+# Your Firebase project's service account key, mounted read-only by compose.
+service_account_file = "/etc/vouch/firebase.json"
+
+[log]
+level = "info"

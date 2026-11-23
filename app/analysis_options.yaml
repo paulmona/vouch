@@ -1,0 +1,20 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - packages/**
+    # Flutter copies plugin sources here for Swift Package Manager builds.
+    - build/**
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    prefer_single_quotes: true
+    avoid_print: true
+    always_declare_return_types: true
+    prefer_final_locals: true
+    unawaited_futures: true
+    directives_ordering: true

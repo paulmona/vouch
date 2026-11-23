@@ -1,0 +1,9 @@
+# Same list as server/Dockerfile.dockerignore (a test keeps them equal). That one is read
+# only by BuildKit; this one covers any other build that is sent the top of the repository.
+*
+!server/package.json
+!server/package-lock.json
+!server/src
+!server/migrations
+!LICENSE
+!NOTICE

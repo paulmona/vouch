@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Challenge</title>
+<style>.menu { display: none } .open .menu { display: block } .select-option { padding: 4px }</style></head>
+<body>
+<p>To help secure your account you must authorize this device, please answer a question below.</p>
+<form onsubmit="return false">
+  <div class="my-select" id="sel" style="width:240px;height:28px;border:1px solid #ccc"><input role="combobox" readonly id="q" class="my-select-search-input" style="width:200px;opacity:0"><span id="shown"></span></div>
+  <div class="menu" id="menu">
+    <div class="select-option">Your mother's middle name?</div>
+    <div class="select-option">Your first car?</div>
+  </div>
+  <input type="password" name="answer">
+  <button type="button" id="go" disabled>Submit</button>
+</form>
+<div id="msg"></div>
+<script>
+  // Mimics an Ant Design select: click to open, click an option. Trusted clicks only.
+  const sel = document.getElementById('sel'), menu = document.getElementById('menu'), q = document.getElementById('q');
+  sel.addEventListener('click', ev => { if (ev.isTrusted) document.body.classList.add('open'); });
+  menu.querySelectorAll('.select-option').forEach(o => o.addEventListener('click', ev => {
+    if (!ev.isTrusted) return; q.value = o.innerText; document.getElementById('shown').textContent = o.innerText; document.body.classList.remove('open'); ready();
+  }));
+  const ready = () => { document.getElementById('go').disabled = !(q.value && document.querySelector('[name=answer]').value); };
+  document.querySelector('[name=answer]').addEventListener('input', ready);
+  document.getElementById('go').addEventListener('click', ev => {
+    if (!ev.isTrusted) return;
+    const a = document.querySelector('[name=answer]').value;
+    const right = {"Your first car?": 'Corolla', "Your mother's middle name?": 'Anne'};
+    if (q.value && right[q.value] === a) { location.href = 'home.html'; return; }
+    const m = document.getElementById('msg'); m.setAttribute('role', 'alert'); m.textContent = 'The answer is incorrect';
+  });
+</script>
+</body></html>

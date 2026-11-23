@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Script button</title></head>
+<body>
+<form onsubmit="return false">
+  <input name="username" placeholder="Username">
+  <input name="password" type="password">
+  <button type="button" id="go" disabled>Login</button>
+</form>
+<script>
+  // Like some real portals: the only way in is the button's click handler.
+  // Like some real portals: disabled until both fields have something in them.
+  const go = document.getElementById('go');
+  document.querySelectorAll('input').forEach(i => i.addEventListener('input', () => {
+    go.disabled = ![...document.querySelectorAll('input')].every(x => x.value); }));
+  document.getElementById('go').addEventListener('click', () => { location.href = 'home.html'; });
+</script>
+</body></html>

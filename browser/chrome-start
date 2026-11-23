@@ -1,0 +1,243 @@
+#!/bin/sh
+# Bring up a Chrome that an agent, and the broker, can reach over the DevTools
+# port, if one is not already running. Run it as the agent's unix user.
+#
+# The port is this user's line in /etc/vouch-browser/ports, and the port guard
+# must be enforcing it. Chrome runs with a window on a virtual display
+# (Xvfb), not headless, so pages behave as they do for a person. The profile
+# persists in the user's home, so the agent stays signed in between runs.
+#
+# The display has a key (~/.vouch-browser/Xauthority) that only this user can
+# read. Without it another user on the machine could watch the screen and type
+# into the browser. Other programs of this user that need the display set
+# XAUTHORITY to that file. The display also runs without the MIT-SHM extension:
+# with it Chrome puts each frame in a shared memory segment that any user can
+# attach, key or no key.
+#
+# Prints the DevTools version JSON on success; exits non-zero if Chrome never
+# came up.
+set -eu
+
+PORTS_FILE="${VOUCH_BROWSER_PORTS:-/etc/vouch-browser/ports}"
+GUARDED_FILE="${VOUCH_BROWSER_GUARDED:-/run/vouch-browser/guarded}"
+USER_NAME="$(id -un)"
+
+# The port is the one root gave this user, never one the caller picks: only
+# that port is restricted to this user and the broker.
+PORT=""
+if [ -r "$PORTS_FILE" ]; then
+  PORT="$(awk -v u="$USER_NAME" '$1 == u { print $2; exit }' "$PORTS_FILE")"
+fi
+if [ -z "$PORT" ]; then
+  echo "chrome-start: no port for $USER_NAME in $PORTS_FILE (add it with: sudo browser/setup $USER_NAME:PORT)" >&2
+  exit 1
+fi
+if [ -n "${CHROME_CDP_PORT:-}" ] && [ "$CHROME_CDP_PORT" != "$PORT" ]; then
+  echo "chrome-start: ignoring CHROME_CDP_PORT=$CHROME_CDP_PORT; this user's port is $PORT" >&2
+fi
+# A browser on a port the guard is not enforcing can be driven by any user on
+# the machine. The guard records what it loaded; nothing recorded, no browser.
+if ! grep -qx "$PORT $(id -u)" "$GUARDED_FILE" 2>/dev/null; then
+  echo "chrome-start: the port guard is not protecting port $PORT for $USER_NAME. Not starting a browser on it." >&2
+  echo "chrome-start: as root, run: vouch-cdp-guard load   (and see: systemctl status vouch-cdp-guard)" >&2
+  exit 1
+fi
+# The port guard decides who may connect to this port, not who listens on it.
+# If another user got there first, the browser answering is theirs: say so and
+# stop, so nobody signs in to it.
+port_is_ours() {
+  others="$(awk -v port="$(printf '%04X' "$PORT")" -v me="$(id -u)" \
+    '$4 == "0A" && $2 ~ (":" port "$") && $8 != me { print $8 }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u | tr '\n' ' ')"
+  [ -z "$others" ] && return 0
+  echo "chrome-start: port ${PORT} is held by another user (uid ${others% }), not by $USER_NAME. Not using it." >&2
+  return 1
+}
+port_is_ours || exit 1
+
+# One display per port, so two agents never share a screen: 9222 is :99.
+DISPLAY_NUM="${CHROME_DISPLAY:-:$((PORT - 9123))}"
+PROFILE="${CHROME_USER_DATA_DIR:-$HOME/.vouch-browser/profile}"
+
+STATE_DIR="$HOME/.vouch-browser"
+XAUTH_FILE="$STATE_DIR/Xauthority"
+
+export DISPLAY="$DISPLAY_NUM"
+export XAUTHORITY="$XAUTH_FILE"
+
+if ! command -v google-chrome-stable >/dev/null 2>&1; then
+  echo "chrome-start: Google Chrome is not installed (run browser/setup)" >&2
+  exit 1
+fi
+
+SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
+LOCK="/tmp/.X${DISPLAY_NUM#:}-lock"
+
+# Whether a display is up is a question about the process, not the socket
+# file: the socket can outlive the Xvfb that made it, and Chrome then dies on
+# "Missing X server or $DISPLAY". Prints "<uid> <pid> <command line>" for the
+# Xvfb serving our display, whoever runs it.
+display_server() {
+  for proc in /proc/[0-9]*; do
+    # The process must be an Xvfb, not one that only has those words on its
+    # command line (the sudo or shell that launched it, a search for it).
+    comm=""
+    read -r comm 2>/dev/null < "$proc/comm" || continue
+    [ "$comm" = Xvfb ] || continue
+    cmd="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null)"
+    case "$cmd" in
+      *" $DISPLAY_NUM "*) echo "$(stat -c %u "$proc" 2>/dev/null) ${proc#/proc/} $cmd"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+chrome_answers() {
+  curl -sf "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1
+}
+
+start_display() {
+  if ! command -v xauth >/dev/null 2>&1; then
+    echo "chrome-start: xauth is not installed (run browser/setup again)" >&2
+    exit 1
+  fi
+  # A new key for every display server, in a file only this user can read.
+  # It is made beside the key file and renamed into place, so the path never
+  # holds an empty file: a display server reads its key file again when it
+  # changes, and lets any local user in while the file is empty.
+  new_key="$(umask 077 && mktemp "$XAUTH_FILE.XXXXXX")"
+  # The key goes to xauth on its input, never as an argument: every user on
+  # the machine can read every command line.
+  xauth -q -f "$new_key" source - <<KEY
+add $DISPLAY_NUM . $(mcookie)
+KEY
+  mv -f "$new_key" "$XAUTH_FILE"
+  # Xvfb refuses to start while a lock or socket from a dead server is present.
+  rm -f "$SOCKET" "$LOCK" 2>/dev/null || true
+  if [ -e "$SOCKET" ] || [ -e "$LOCK" ]; then
+    echo "chrome-start: display $DISPLAY_NUM is blocked by a file another user made ($SOCKET or $LOCK). Remove it as root." >&2
+    exit 1
+  fi
+  # 9 is the lock this script holds; the display server must not keep it.
+  Xvfb "$DISPLAY_NUM" -auth "$XAUTH_FILE" -extension MIT-SHM -screen 0 1920x1080x24 -nolisten tcp >/dev/null 2>&1 9>&- &
+  i=0
+  while [ ! -S "$SOCKET" ] && [ "$i" -lt 50 ]; do
+    i=$((i + 1))
+    sleep 0.1
+  done
+  if [ ! -S "$SOCKET" ]; then
+    echo "chrome-start: Xvfb did not start on $DISPLAY_NUM." >&2
+    exit 1
+  fi
+}
+
+# One run at a time looks at the display and starts it. Two at once would each
+# make a key and a server, one over the other's.
+mkdir -p "$STATE_DIR"
+chmod 0700 "$STATE_DIR"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "chrome-start: flock is not installed (it is in the util-linux package)" >&2
+  exit 1
+fi
+exec 9>"$STATE_DIR/display.lock"
+flock 9
+
+if server="$(display_server)"; then
+  server_uid="${server%% *}"
+  rest="${server#* }"
+  server_pid="${rest%% *}"
+  if [ "$server_uid" != "$(id -u)" ]; then
+    echo "chrome-start: display $DISPLAY_NUM is run by another user (uid $server_uid), who could watch this browser. Not using it." >&2
+    exit 1
+  fi
+  # A display from before displays had keys lets any user connect to it. One
+  # from before MIT-SHM was turned off has a key, but Chrome's frames on it are
+  # in shared memory that any user can attach.
+  open=""
+  case "$rest" in
+    *" -auth $XAUTH_FILE "*) ;;
+    *) open="has no access control" ;;
+  esac
+  case "$rest" in
+    *" -extension MIT-SHM "*) ;;
+    *) [ -n "$open" ] || open="puts the screen in shared memory that other users can read" ;;
+  esac
+  if [ -n "$open" ]; then
+    if chrome_answers; then
+      echo "chrome-start: warning: display $DISPLAY_NUM $open (started by an older chrome-start)." >&2
+      echo "chrome-start: to fix, close Chrome, run: kill $server_pid, then chrome-start again." >&2
+    else
+      kill "$server_pid" 2>/dev/null || true
+      i=0
+      while [ -d "/proc/$server_pid" ] && [ "$i" -lt 50 ]; do
+        i=$((i + 1))
+        sleep 0.1
+      done
+      start_display
+    fi
+  fi
+else
+  start_display
+fi
+flock -u 9
+exec 9>&-
+
+# True only for a process that exists, is not a zombie, and is Chrome. The
+# last check guards against pid reuse handing us an unrelated process.
+pid_is_live_chrome() {
+  _pid="$1"
+  [ -r "/proc/${_pid}/status" ] || return 1
+  grep -q '^State:[[:space:]]*[Zz]' "/proc/${_pid}/status" && return 1
+  case "$(cat "/proc/${_pid}/comm" 2>/dev/null)" in
+    *chrome*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Chrome exits silently on a profile it believes is open elsewhere.
+# SingletonLock is a symlink named <hostname>-<pid>; after a crash, a reboot or
+# a hostname change it points at nothing and Chrome refuses forever after.
+clear_stale_singleton() {
+  lock="$PROFILE/SingletonLock"
+  [ -L "$lock" ] || return 0
+  target="$(readlink "$lock" 2>/dev/null)" || return 0
+  lock_host="${target%-*}"
+  lock_pid="${target##*-}"
+  if [ "$lock_host" = "$(hostname)" ] && pid_is_live_chrome "$lock_pid"; then
+    return 0
+  fi
+  echo "chrome-start: clearing a stale profile lock left by ${lock_host}" >&2
+  rm -f "$lock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
+}
+
+if ! chrome_answers; then
+  mkdir -p "$PROFILE"
+  chmod 0700 "$PROFILE"
+  clear_stale_singleton
+  # CHROME_EXTRA_FLAGS is split into words on purpose.
+  # shellcheck disable=SC2086
+  google-chrome-stable \
+    --remote-debugging-port="$PORT" \
+    --user-data-dir="$PROFILE" \
+    --no-first-run \
+    --no-default-browser-check \
+    --window-size=1920,1080 \
+    ${CHROME_EXTRA_FLAGS:-} \
+    about:blank >"$PROFILE/chrome-start.log" 2>&1 &
+
+  i=0
+  while [ "$i" -lt 30 ]; do
+    curl -sf "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1 && break
+    i=$((i + 1))
+    sleep 1
+  done
+fi
+
+port_is_ours || exit 1
+if ! curl -sf "http://127.0.0.1:${PORT}/json/version"; then
+  echo "chrome-start: Chrome did not come up on port ${PORT}." >&2
+  echo "chrome-start: DISPLAY=$DISPLAY_NUM, Xvfb running: $(display_server >/dev/null && echo yes || echo no)" >&2
+  echo "chrome-start: last Chrome output follows, if any:" >&2
+  tail -n 20 "$PROFILE/chrome-start.log" 2>/dev/null >&2 || true
+  exit 1
+fi

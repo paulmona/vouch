@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict access to agents' Chrome DevTools ports
+# Before any network is up, as a firewall should be.
+Wants=network-pre.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vouch-cdp-guard load
+ExecReload=/usr/local/sbin/vouch-cdp-guard load
+
+[Install]
+WantedBy=multi-user.target

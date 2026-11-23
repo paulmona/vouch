@@ -1,0 +1,58 @@
+# Secrets: never commit
+*.jks
+*.keystore
+key.properties
+google-services.json
+GoogleService-Info.plist
+*service-account*.json
+# The name Firebase gives a downloaded service account key.
+*-firebase-adminsdk-*.json
+*-sa.json
+.env
+.env.*
+secrets.env
+vault.env
+# The Firebase service account key the server guides have you save, wherever it is put.
+firebase.json
+# Vault AppRole credentials, and private keys under any name.
+.vault-creds/
+role_id
+secret_id
+*.key
+*.pem
+# Public certificates only: Google's attestation roots and a sample chain.
+!server/src/data/google-attestation-roots.pem
+!server/test/fixtures/attestation/google-ec-TEE.pem
+*.p8
+*.p12
+*.mobileprovision
+
+# Node
+node_modules/
+dist/
+coverage/
+*.log
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+*.apk
+*.aab
+*.ipa
+*.xcarchive/
+app/android/.gradle/
+app/android/local.properties
+app/ios/Pods/
+app/ios/.symlinks/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

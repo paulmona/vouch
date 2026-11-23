@@ -1,0 +1,129 @@
+# Builds and publishes a server release when a server-vX.Y.Z tag is pushed:
+# the bundle for deploy/install.sh, and the Docker image on GHCR.
+name: release-server
+
+on:
+  push:
+    tags: ["server-v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-server-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A repository setting, not this file, decides who may run this job: the `release`
+    # environment's reviewers and tag rules apply even to a tag whose workflow was edited.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # Fails closed. Only the `release` environment, set up as docs/maintaining.md says,
+      # holds this variable. If the environment is missing GitHub makes an empty one when a
+      # tag is pushed, with no reviewer and no tag rule, and this job would publish with
+      # the built-in token alone.
+      - name: The release environment is set up
+        env:
+          READY: ${{ vars.RELEASE_ENV_READY }}
+        run: |
+          [ "$READY" = "true" ] || { echo "::error::The release environment is not set up (RELEASE_ENV_READY is not true). See docs/maintaining.md."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: The tag names main's server version
+        run: |
+          want=${GITHUB_REF_NAME#server-v}
+          have=$(node -p 'require("./server/package.json").version')
+          [ "$want" = "$have" ] || { echo "::error::$GITHUB_REF_NAME, but server/package.json is $have"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+
+      - name: Lint, typecheck, tests, audit
+        working-directory: server
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - name: Bundle
+        run: server/deploy/bundle.sh dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${GITHUB_REF_NAME#server-v}
+          prev=$(git tag -l 'server-v*' --sort=-v:refname | grep -vxF "$GITHUB_REF_NAME" | head -1 || true)
+          {
+            echo "Server $v, commit $GITHUB_SHA."
+            echo
+            echo "Install: \`server/deploy/install.sh prod $GITHUB_REF_NAME\`, or the image \`ghcr.io/paulmona/vouch-server:$v\`"
+            echo
+            if [ -n "$prev" ]; then git log --format='- %s' "$prev..$GITHUB_SHA" -- server api; else git log --format='- %s' -- server api | head -50; fi
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "dist/vouch-server-$v.tar.gz" "dist/vouch-server-$v.tar.gz.sha256" \
+            --title "Server $v" --notes-file notes.md --verify-tag
+
+  image:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Fails closed. Only the `release` environment, set up as docs/maintaining.md says,
+      # holds this variable. If the environment is missing GitHub makes an empty one when a
+      # tag is pushed, with no reviewer and no tag rule, and this job would publish with
+      # the built-in token alone.
+      - name: The release environment is set up
+        env:
+          READY: ${{ vars.RELEASE_ENV_READY }}
+        run: |
+          [ "$READY" = "true" ] || { echo "::error::The release environment is not set up (RELEASE_ENV_READY is not true). See docs/maintaining.md."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Tags
+        id: tags
+        run: |
+          v=${GITHUB_REF_NAME#server-v}
+          echo "list=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/vouch-server:$v,ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/vouch-server:latest" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ github.ref_name }}

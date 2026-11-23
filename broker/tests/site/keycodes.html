@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Key code check</title></head>
+<body>
+<form onsubmit="return false"><input id="email" type="email"><input id="pw" type="password"></form>
+<script>
+  // Like one Azure AD B2C sign-in page: a keydown with no key code (keyCode 0) jams the
+  // password field, which then swallows every later key.
+  let jammed = false;
+  document.getElementById('pw').addEventListener('keydown', e => {
+    if (e.keyCode === 0) jammed = true;
+    if (jammed) { e.preventDefault(); e.stopImmediatePropagation(); }
+  });
+  // And a field that drops a key arriving within 250 ms of the previous one.
+  let last = 0;
+  document.getElementById('email').addEventListener('keydown', e => {
+    const now = performance.now();
+    if (now - last < 250) e.preventDefault();
+    last = now;
+  });
+</script>
+</body></html>

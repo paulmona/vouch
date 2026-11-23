@@ -1,0 +1,79 @@
+# Weekly, grouped, to keep PR noise and CI minutes down. The 14-day cooldown
+# keeps the repo rule that every dependency version is at least two weeks old.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # Types track the Node we run (24), not the newest Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # typescript-eslint supports TypeScript below 6.1; lift this when it supports 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+    groups:
+      server:
+        patterns: ["*"]
+  - package-ecosystem: pub
+    directory: /app
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      app:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /broker
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      broker:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # The image runs the Node that CI and the release bundle use (24). A new
+      # major is one deliberate change to all three.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      image:
+        patterns: ["*"]
+  - package-ecosystem: docker-compose
+    directory: /server/deploy/docker
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      compose:
+        patterns: ["*"]
+  - package-ecosystem: gradle
+    directory: /app/android
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      android:
+        patterns: ["*"]

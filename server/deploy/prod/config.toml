@@ -1,0 +1,41 @@
+# Vouch approver. Written once by deploy/install.sh; later installs leave it
+# alone. Every key is documented in config.example.toml.
+
+[server]
+# Shown in the app after pairing. Defaults to the host name.
+# name = "home-server"
+
+[policy]
+require_user_auth = true
+
+[app]
+host = "127.0.0.1"
+port = 8770
+# The address phones use, scheme and host only, e.g. https://vouch.example.com.
+# `vouch setup-code` refuses until it is set.
+public_url = ""
+# The reverse proxy in front of Vouch, e.g. ["127.0.0.1"] for Caddy or
+# cloudflared on this host.
+trusted_proxies = []
+
+[sockets]
+broker = "/run/vouch/broker.sock"
+broker_group = "vouch-broker"
+admin = "/run/vouch/admin.sock"
+
+[store]
+path = "/var/lib/vouch/vouch.db"
+
+[firebase]
+# Your Firebase project's service account key (JSON), readable by the vouch
+# user. Empty means no push notifications: a new install starts that way, and
+# a file named here must exist or the server will not start. Once the key is
+# in place, set this to "/etc/vouch/firebase.json" and restart.
+service_account_file = ""
+
+[heartbeat]
+interval_hours = 24
+silent_after_hours = 48
+
+[log]
+level = "info"

@@ -1,0 +1,3 @@
+#!/bin/sh
+# The vouch CLI for production, run as its user.
+exec sudo -u vouch /usr/bin/node /opt/vouch/prod/current/src/cli.ts "$@"

@@ -1,0 +1,41 @@
+# A LAN test approver. Installed by deploy/install.sh test <tag>.
+[Unit]
+Description=Vouch approver (LAN test instance)
+After=network.target
+
+[Service]
+Type=simple
+User=vouch-test
+Group=vouch-test
+ExecStart=/usr/bin/node /opt/vouch/test/current/src/main.ts --config /etc/vouch-test/config.toml
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+RuntimeDirectory=vouch-test
+RuntimeDirectoryMode=0700
+StateDirectory=vouch-test
+StateDirectoryMode=0700
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Fastify lists the network interfaces (netlink) when bound to 0.0.0.0.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

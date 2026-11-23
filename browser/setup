@@ -1,0 +1,138 @@
+#!/bin/bash
+# Give agents a Chrome the broker can type sign-ins into: Google Chrome, a
+# virtual display, the chrome-start and attach helpers, and a guard on each
+# agent's DevTools port. Idempotent; run it again to add an agent.
+#
+#   sudo browser/setup USER:PORT [USER:PORT ...]
+#   sudo browser/setup research:9222 assistant:9223
+#
+# Each agent is a unix user with its own port (the cdp_port in the broker's
+# config.toml) and its own browser profile in its home. With no arguments it
+# installs or updates the software and reloads the guard.
+#
+# Supported: Debian and Ubuntu on amd64 (Google publishes no arm64 Linux
+# Chrome). Elsewhere, bring your own Chrome with --remote-debugging-port and
+# --user-data-dir, and install the guard alone: see README.md.
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+ETC=/etc/vouch-browser
+PORTS=$ETC/ports
+OPT=/opt/vouch-browser
+# Pinned: bump deliberately. The library only; no bundled browser is downloaded.
+PLAYWRIGHT_VERSION=1.65.1
+
+die() { echo "setup: $*" >&2; exit 1; }
+say() { echo "setup: $*"; }
+
+# Names each running Xvfb that was started without "-extension MIT-SHM": the
+# user it runs as, and how to replace it. Chrome's frames on such a display are
+# in shared memory that every user on the machine can read. chrome-start only
+# warns the agent about it; this tells the owner.
+#
+# A process counts by the test chrome-start uses: its name is Xvfb, and
+# "-extension MIT-SHM" is not on its command line. Here the arguments are read
+# one by one, so those words inside some other argument do not make a display
+# look safe.
+# Nothing from the command line is printed except a display number: another
+# user wrote it, and root's terminal is reading.
+list_open_displays() {
+  local proc=${1:-/proc} dir comm arg prev display off args uid user
+  for dir in "$proc"/[0-9]*; do
+    comm=""
+    read -r comm 2>/dev/null < "$dir/comm" || continue
+    [ "$comm" = Xvfb ] || continue
+    [ -r "$dir/cmdline" ] || continue
+    prev="" display="" off="" args=0
+    while IFS= read -r -d '' arg; do
+      args=$((args + 1))
+      if [ -z "$display" ] && [[ $arg =~ ^:[0-9]+$ ]]; then display=$arg; fi
+      if [ "$prev" = -extension ] && [ "$arg" = MIT-SHM ]; then off=yes; fi
+      prev=$arg
+    done 2>/dev/null < "$dir/cmdline" || continue
+    # No command line: a process that has already exited.
+    [ "$args" -gt 0 ] && [ -z "$off" ] || continue
+    uid=$(stat -c %u "$dir" 2>/dev/null) || continue
+    user=$(id -nu "$uid" 2>/dev/null) || user="uid $uid"
+    # Xvfb serves :0 when it is given no display.
+    say "display ${display:-:0} of $user (Xvfb, pid ${dir##*/}) puts the screen in shared memory that other users can read"
+    say "  to fix, as $user: close Chrome, run: kill ${dir##*/}, then chrome-start again"
+  done
+  return 0
+}
+
+# Sourced, not run: the functions above are all a test wants.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+command -v apt-get >/dev/null || die "this script supports Debian and Ubuntu; see README.md for other systems"
+[ "$(dpkg --print-architecture)" = amd64 ] || die "Google publishes no Chrome for $(dpkg --print-architecture) Linux; see README.md"
+
+for a in "$@"; do
+  [[ $a =~ ^([a-z_][a-z0-9_-]*):([0-9]+)$ ]] || die "not USER:PORT: $a"
+  id -u "${BASH_REMATCH[1]}" >/dev/null 2>&1 || die "no such user: ${BASH_REMATCH[1]}"
+  [ "${BASH_REMATCH[2]}" -ge 9222 ] && [ "${BASH_REMATCH[2]}" -le 9999 ] || die "pick a port from 9222 to 9999: $a"
+done
+
+# 1. Chrome from Google's own repository, with a virtual display and fonts.
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
+if ! command -v google-chrome-stable >/dev/null 2>&1; then
+  say "installing Google Chrome"
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg >/dev/null
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends google-chrome-stable >/dev/null
+fi
+apt-get install -y -qq --no-install-recommends xvfb xauth fonts-liberation fonts-noto-color-emoji nftables curl >/dev/null
+say "$(google-chrome-stable --version)"
+
+# 2. Helpers.
+install -d -m 0755 "$OPT" "$ETC"
+install -m 0755 "$here/chrome-start" /usr/local/bin/chrome-start
+install -m 0644 "$here/chrome-attach.js" "$OPT/chrome-attach.js"
+install -m 0755 "$here/cdp-guard" /usr/local/sbin/vouch-cdp-guard
+install -m 0644 "$here/vouch-cdp-guard.service" /etc/systemd/system/vouch-cdp-guard.service
+
+# 3. Playwright's Node library, for agents that drive the browser with it. It
+# attaches to the running Chrome (chrome-attach.js); it never launches its own.
+if command -v npm >/dev/null 2>&1; then
+  if [ "$(node -p "require('$OPT/node_modules/playwright/package.json').version" 2>/dev/null)" != "$PLAYWRIGHT_VERSION" ]; then
+    say "installing the Playwright library $PLAYWRIGHT_VERSION (no bundled browser)"
+    [ -f "$OPT/package.json" ] || echo '{"name":"vouch-browser","private":true,"type":"module"}' > "$OPT/package.json"
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm --prefix "$OPT" install --silent --no-audit --no-fund --ignore-scripts "playwright@$PLAYWRIGHT_VERSION"
+  fi
+else
+  say "npm is not installed, so the Playwright library and chrome-attach.js are skipped (the broker does not need them)"
+fi
+
+# 4. One line per agent: "user port". World-readable: it holds no secret.
+[ -f "$PORTS" ] || printf '# One agent per line: unix user, then its Chrome DevTools port.\n' > "$PORTS"
+chmod 0644 "$PORTS"
+for a in "$@"; do
+  user=${a%%:*} port=${a##*:}
+  other=$(awk -v u="$user" -v p="$port" '$1 !~ /^#/ && $2 == p && $1 != u { print $1; exit }' "$PORTS")
+  [ -z "$other" ] || die "port $port already belongs to $other"
+  sed -i "/^${user}[[:space:]]/d" "$PORTS"
+  echo "$user $port" >> "$PORTS"
+  say "$user uses port $port"
+done
+
+# 5. The guard.
+systemctl daemon-reload
+if grep -q '^[^#[:space:]]' "$PORTS"; then
+  # Started through systemd, so `systemctl status` shows it loaded.
+  systemctl enable -q vouch-cdp-guard.service
+  systemctl restart vouch-cdp-guard.service
+  say "the port guard is loaded for $(grep -c '^[^#[:space:]]' "$PORTS") agent(s)"
+  say "done. As each agent's user, run: chrome-start"
+else
+  say "done, with no agents yet. Add one: sudo browser/setup USER:PORT"
+fi
+
+# 6. Displays from before an upgrade stay readable until they are restarted.
+list_open_displays || true

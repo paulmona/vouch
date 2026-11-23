@@ -1,0 +1,15 @@
+# Lint for the broker. Run from broker/: uvx ruff@0.8.6 check .
+target-version = "py312"
+line-length = 120
+
+[lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, and the bandit security rules.
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = [
+  "E501",  # long lines: formatting is not enforced
+  "E741",  # `l` for a login reads fine here
+  "S310",  # urlopen only ever gets URLs built from our own config
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106", "S311", "S603", "S607", "F811", "E731"]

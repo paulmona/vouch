@@ -1,0 +1,8 @@
+# Default rules, plus one allowlisted file: the API test vectors deliberately
+# publish a throwaway P-256 test key so both clients can check their signing.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Throwaway test key for the API signing vectors"
+paths = ['''^api/test-vectors\.json$''']

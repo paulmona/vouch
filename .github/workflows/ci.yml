@@ -1,0 +1,205 @@
+# Lint, tests and security checks for Vouch.
+#
+# Kept cheap on purpose: one job, so one runner start rather than one per
+# check; superseded runs cancelled; on a pull request each part is skipped when
+# the PR does not touch it, except the server's tests, which read the whole
+# tree; and a weekly run to catch new advisories with no PR. Every push to main
+# runs everything: two pull requests that each pass alone can fail together.
+# The single job is named `checks` so one required status check covers
+# everything.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 10 * * 1"   # Mondays, 10:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  OASDIFF_VERSION: 1.34.0
+  OASDIFF_SHA256: 7c88e09fd500b231af2819eb21f6fdfc7bcdfe2741d2c1937c59e7b72c8a575a
+  REDOCLY: "@redocly/cli@2.65.1"
+  NODE_VERSION: "24"
+  RUFF: ruff@0.8.6
+  PIP_AUDIT: pip-audit@2.7.3
+  SHELLCHECK: shellcheck-py==0.11.0.1
+  FLUTTER_CHANNEL: stable
+  # Pinned: a floating stable broke CI when 3.50 deprecated package:flutter/material.dart.
+  # Move up deliberately (the material_ui migration is pending).
+  FLUTTER_VERSION: "3.44.2"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: What changed
+        id: changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          all() { for p in api server app broker; do echo "$p=true" >> "$GITHUB_OUTPUT"; done; }
+          if [ "$EVENT" != "pull_request" ]; then all; exit 0; fi
+          files=$(git diff --name-only "$BASE...HEAD")
+          printf '%s\n' "$files"
+          # A CI change re-runs everything, so a broken workflow cannot hide.
+          if grep -q '^\.github/' <<<"$files"; then all; exit 0; fi
+          for p in api server app broker; do
+            grep -q "^$p/" <<<"$files" && echo "$p=true" >> "$GITHUB_OUTPUT" || true
+          done
+          # The app's generated client comes from api/openapi.yaml, so a contract
+          # change must run the app's checks too.
+          grep -q "^api/" <<<"$files" && echo "app=true" >> "$GITHUB_OUTPUT" || true
+          # browser/ is checked with the broker.
+          grep -q "^browser/" <<<"$files" && echo "broker=true" >> "$GITHUB_OUTPUT" || true
+          # LICENSE and NOTICE ship in the server image, the broker's wheel and the app,
+          # and each part tests the copy it ships.
+          grep -qxE "LICENSE|NOTICE" <<<"$files" && all || true
+
+      # Every run, whole history: the check that matters before anything is published.
+      - name: Secret scan (gitleaks, full history)
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git --no-banner --redact --exit-code 1 .
+
+      # Developer Certificate of Origin: see CONTRIBUTING.md.
+      - name: Every commit is signed off
+        if: github.event_name == 'pull_request'
+        # HEAD here is GitHub's merge of the branch into main. Its first parent
+        # is main as it is now and its second is the branch, so this range is
+        # the pull request's own commits even after main has moved.
+        run: .github/check-signoff.sh 'HEAD^1' 'HEAD^2'
+
+      # ---- api/ ----------------------------------------------------------
+      - name: API lint (Redocly)
+        if: steps.changed.outputs.api && hashFiles('api/openapi.yaml') != ''
+        run: npx --yes "$REDOCLY" lint api/openapi.yaml
+
+      # The contract is shared by two builders: a breaking change must be deliberate.
+      # Label the PR `api-breaking` to acknowledge one.
+      - name: API breaking-change check (oasdiff)
+        if: >-
+          steps.changed.outputs.api && github.event_name == 'pull_request'
+          && hashFiles('api/openapi.yaml') != ''
+          && !contains(github.event.pull_request.labels.*.name, 'api-breaking')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! git cat-file -e "$BASE:api/openapi.yaml" 2>/dev/null; then echo "No spec on base yet"; exit 0; fi
+          curl -fsSL -o /tmp/oasdiff.tgz "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_SHA256}  /tmp/oasdiff.tgz" | sha256sum -c -
+          tar -xzf /tmp/oasdiff.tgz -C /tmp oasdiff
+          git show "$BASE:api/openapi.yaml" > /tmp/base.yaml
+          /tmp/oasdiff breaking /tmp/base.yaml api/openapi.yaml --fail-on ERR
+
+      # ---- broker/ -------------------------------------------------------
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: steps.changed.outputs.broker && hashFiles('broker/uv.lock') != ''
+        with:
+          enable-cache: true
+          cache-dependency-glob: "broker/uv.lock"
+
+      # The fill tests drive the runner's own headless Chrome; they skip without one.
+      - name: Broker lint, tests, audit
+        if: steps.changed.outputs.broker && hashFiles('broker/uv.lock') != ''
+        working-directory: broker
+        run: |
+          uvx "$RUFF" check .
+          uvx --from "$SHELLCHECK" shellcheck -S warning deploy/install.sh deploy/bundle.sh \
+            ../browser/setup ../browser/cdp-guard ../browser/chrome-start
+          printf 'root 9222\n' > /tmp/ports
+          VOUCH_BROWSER_PORTS=/tmp/ports VOUCH_BROKER_USER=daemon ../browser/cdp-guard print | grep -qF 'tcp dport 9222 meta skuid { 0, 1 } accept'
+          # Every Python the broker says it runs on.
+          for py in 3.12 3.13; do uv run --frozen --python "$py" pytest -q; done
+          uv export --frozen --no-dev --no-emit-project --no-hashes -o /tmp/req.txt
+          uvx "$PIP_AUDIT" --disable-pip --no-deps -r /tmp/req.txt
+
+      # ---- server/ -------------------------------------------------------
+      # Not skipped for a PR that leaves server/ alone: the server's tests also check the
+      # documents, the workflows and the whole tree, so any change can break one.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: hashFiles('server/package-lock.json') != ''
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Server lint, typecheck, tests, audit
+        if: hashFiles('server/package-lock.json') != ''
+        working-directory: server
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      # The Docker image builds, starts healthy, and makes a pairing code.
+      - name: Server Docker image smoke test
+        if: steps.changed.outputs.server && hashFiles('server/Dockerfile') != ''
+        run: |
+          docker build -t vouch-server:ci -f server/Dockerfile .
+          mkdir -p "$RUNNER_TEMP/vouch"
+          sed -e 's#^service_account_file = .*#service_account_file = ""#' \
+            server/deploy/docker/config.toml > "$RUNNER_TEMP/vouch/config.toml"
+          docker run -d --name vouch -p 127.0.0.1:8770:8770 \
+            -v "$RUNNER_TEMP/vouch/config.toml:/etc/vouch/config.toml:ro" vouch-server:ci
+          for i in $(seq 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' vouch)" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' vouch | grep -qx healthy || { docker logs vouch; exit 1; }
+          curl -fsS http://127.0.0.1:8770/healthz
+          docker exec vouch vouch setup-code | grep -q 'vouch://pair' || { docker logs vouch; exit 1; }
+          docker rm -f vouch
+
+      # ---- app/ ----------------------------------------------------------
+      # openapi-generator (API client regeneration below) runs on Java.
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        if: steps.changed.outputs.app && hashFiles('app/pubspec.yaml') != ''
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        if: steps.changed.outputs.app && hashFiles('app/pubspec.yaml') != ''
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      # The committed Dart client must match api/openapi.yaml: regenerate with
+      # the pinned generator and fail on any difference.
+      - name: API client regenerates cleanly
+        if: steps.changed.outputs.app && hashFiles('app/tool/generate_api.sh') != ''
+        run: |
+          ./app/tool/generate_api.sh
+          git diff --exit-code --stat -- app/packages
+
+      - name: App analyze and tests
+        if: steps.changed.outputs.app && hashFiles('app/pubspec.yaml') != ''
+        working-directory: app
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test

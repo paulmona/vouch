@@ -1,0 +1,96 @@
+{
+  "_comment": "TEST KEY ONLY. Generated for the Vouch API contract test vectors; it protects nothing. ECDSA signatures are randomised, so clients must check that their own signature VERIFIES against public_key, not that it equals signature_b64url. The pair case's body uses placeholders for the keys and the proof; it is hashed and signed exactly as written, placeholders included. Real pair bodies carry the device's own keys.",
+  "algorithm": "ECDSA P-256 with SHA-256, DER-encoded signature, base64url without padding",
+  "public_key_spki_b64url": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcLRfl-9odUZhA5P8tJCyEOiAxOscJ0feF6WzEJAigOjiXgHq6h2oNjMrynBu5X2smv6lWOL1uzmL8leD6jBkYA",
+  "private_key_pkcs8_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQge+0ir0mnbBvz0+dg\n1rM0HZDAZQjXIohaELkCnSlFPmuhRANCAARwtF+X72h1RmEDk/y0kLIQ6IDE6xwn\nR94XpbMQkCKA6OJeAerqHag2MyvKcG7lfaya/qVY4vW7OYvyV4PqMGRg\n-----END PRIVATE KEY-----\n",
+  "cases": [
+    {
+      "name": "decision with body",
+      "method": "POST",
+      "target": "/v1/requests/3f9c2a7b1d4e8f60/decision",
+      "body": "{\"decision\":\"once\"}",
+      "timestamp": "1793804400",
+      "nonce": "q1w2e3r4t5y6u7i8o9p0aA",
+      "body_sha256_hex": "16d6b8f961e69f4cbbfd04ec2140879da583d4630c234176f519fc686abb046d",
+      "canonical": "POST\n/v1/requests/3f9c2a7b1d4e8f60/decision\n16d6b8f961e69f4cbbfd04ec2140879da583d4630c234176f519fc686abb046d\n1793804400\nq1w2e3r4t5y6u7i8o9p0aA",
+      "signature_b64url": "MEUCIAlUJmRUhI0SjOROkduh9VUVbxIoGY5C8eAo-W5r9eLSAiEAxOpX9fInFmmCZz8EPwUYP7A1I0pyL9Un4de65by9_Xw"
+    },
+    {
+      "name": "get with query, empty body",
+      "method": "GET",
+      "target": "/v1/requests/pending?limit=20",
+      "body": "",
+      "timestamp": "1793804460",
+      "nonce": "Zx9Yw8Xv7Wu6Vt5Us4Tr3Q",
+      "body_sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "GET\n/v1/requests/pending?limit=20\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1793804460\nZx9Yw8Xv7Wu6Vt5Us4Tr3Q",
+      "signature_b64url": "MEYCIQDsBLRHkZLPJvdv2MmjO53absWclJpmnZ1q2wLLX0fj6gIhAMgm6xSta43gPLL3YxmnyFYplpVaoUIwvx2W64nKT2qk"
+    },
+    {
+      "name": "pair (signed with the new transport key)",
+      "method": "POST",
+      "target": "/v1/devices/pair",
+      "body": "{\"setup_token\":\"TEST-SETUP-TOKEN\",\"public_key\":\"<decision_key_spki_b64url>\",\"attestation_chain\":[],\"decision_key_proof\":\"<decision_key_proof_b64url>\",\"transport_public_key\":\"<public_key_spki_b64url>\",\"push_token\":\"test-push-token\",\"name\":\"Test phone\",\"platform\":\"android\"}",
+      "timestamp": "1793804520",
+      "nonce": "Pp0Oo9Ii8Uu7Yy6Tt5Rr4E",
+      "body_sha256_hex": "542e107e04d2a7c929b22baf4451b80cc63fbe6456511874d5144d395aa02ac2",
+      "canonical": "POST\n/v1/devices/pair\n542e107e04d2a7c929b22baf4451b80cc63fbe6456511874d5144d395aa02ac2\n1793804520\nPp0Oo9Ii8Uu7Yy6Tt5Rr4E",
+      "signature_b64url": "MEQCIA9q0r7Kp5OU58VMIxqTW_u25uSdBze3pejbWAm_CZLtAiBiXxzMo3X8Ic1qpA52v9bjMQjkZ24EMjYiCDWGGjuedQ"
+    }
+  ],
+  "decision_key_proof": {
+    "_comment": "The decision key's proof at pairing, made here with the same test key. Real devices use two different keys.",
+    "setup_token": "TEST-SETUP-TOKEN",
+    "message": "vouch-pair-v1\nTEST-SETUP-TOKEN",
+    "signature_b64url": "MEUCIHBZjyKu6aIr7rz9LvnL_kWmRkGq5FY6oAUxMuWn-YXcAiEA3e9KbSJRsKaPYWFK4RQakvIcUEVaU17Ax4isfw4DiWQ"
+  },
+  "shown_digest": {
+    "_comment": "What the app displayed for a request, as hashed into the decision body. `canonical` is the exact string whose UTF-8 bytes are hashed; lengths are UTF-8 byte counts.",
+    "cases": [
+      {
+        "name": "sign_in",
+        "request": {
+          "request_id": "req_3fK9s2LmQ8xT",
+          "kind": "sign_in",
+          "agent": "Research agent",
+          "site": "example.com",
+          "login_title": "Example (work)",
+          "expires_at": "2026-01-02T03:04:05.000Z"
+        },
+        "canonical": "vouch-shown-v1\nrequest_id=16:req_3fK9s2LmQ8xT\nkind=7:sign_in\nagent=14:Research agent\nsite=11:example.com\nlogin_title=14:Example (work)\nexpires_at=24:2026-01-02T03:04:05.000Z\nsms_phone=-\nsms_name=-\nsms_reason=-\n",
+        "shown_digest": "2c5ad35149a11ff13e93411bdd4d5e0882c83eee32d606cfdf0ce2150f7b98ab"
+      },
+      {
+        "name": "sign_in without a login title",
+        "request": {
+          "request_id": "req_3fK9s2LmQ8xU",
+          "kind": "sign_in",
+          "agent": "Research agent",
+          "site": "example.com",
+          "login_title": null,
+          "expires_at": "2026-01-02T03:04:05.000Z"
+        },
+        "canonical": "vouch-shown-v1\nrequest_id=16:req_3fK9s2LmQ8xU\nkind=7:sign_in\nagent=14:Research agent\nsite=11:example.com\nlogin_title=-\nexpires_at=24:2026-01-02T03:04:05.000Z\nsms_phone=-\nsms_name=-\nsms_reason=-\n",
+        "shown_digest": "6abbc774e7c6724eaffdf0d07b0f8936013ed185681ead3cf2c8965f1aca0c55"
+      },
+      {
+        "name": "sms_contact, non-ASCII and a newline in the reason",
+        "request": {
+          "request_id": "req_Zt7Qp1VbN4cD",
+          "kind": "sms_contact",
+          "agent": "Assistant",
+          "site": "+14165550123",
+          "login_title": null,
+          "expires_at": "2026-01-03T03:04:05.000Z",
+          "sms_contact": {
+            "phone": "+14165550123",
+            "name": "Zoë",
+            "reason": "Dinner on Friday\nconfirm the time"
+          }
+        },
+        "canonical": "vouch-shown-v1\nrequest_id=16:req_Zt7Qp1VbN4cD\nkind=11:sms_contact\nagent=9:Assistant\nsite=12:+14165550123\nlogin_title=-\nexpires_at=24:2026-01-03T03:04:05.000Z\nsms_phone=12:+14165550123\nsms_name=4:Zoë\nsms_reason=33:Dinner on Friday\nconfirm the time\n",
+        "shown_digest": "3ce07721a28a5398999ccc994be22be86eb59ae5760847912d83aae456a21ca9"
+      }
+    ]
+  }
+}

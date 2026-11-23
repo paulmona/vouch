@@ -1,0 +1,5 @@
+# Generated code is not linted: its style is the generator's, and analyzer
+# versions keep adding lints. The app's analysis_options excludes packages/.
+analyzer:
+  exclude:
+    - "**"

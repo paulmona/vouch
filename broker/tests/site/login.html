@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test login</title></head>
+<body>
+<!-- honeypot the broker must not fill -->
+<input type="password" name="trap" style="display:none">
+<input type="text" name="search" placeholder="Search">
+<form id="f">
+  <label>Email <input id="email" name="email" type="email" autocomplete="username"></label>
+  <label>Password <input id="pw" name="pw" type="password" autocomplete="current-password"></label>
+  <button type="submit">Sign in</button>
+</form>
+<div id="msg"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById('f').addEventListener('submit', ev => {
+    ev.preventDefault();
+    if (document.querySelector('[name=trap]').value) { document.getElementById('msg').textContent = 'honeypot filled'; return; }
+    if (q.has('captcha')) {
+      const c = document.createElement('div'); c.className = 'g-recaptcha';
+      c.style.cssText = 'width:300px;height:80px'; document.body.appendChild(c); return;
+    }
+    const u = document.getElementById('email').value, p = document.getElementById('pw').value;
+    if (u === 'alex@example.com' && p === 'correct horse') { location.href = 'home.html'; return; }
+    const m = document.getElementById('msg'); m.setAttribute('role', 'alert'); m.textContent = q.has('echo') ? `No account ${u} with password ${p}` : 'Incorrect email or password';
+  });
+</script>
+</body></html>

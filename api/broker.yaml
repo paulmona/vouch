@@ -1,0 +1,264 @@
+openapi: 3.1.0
+info:
+  title: Vouch broker API
+  version: 1.0.0
+  summary: How an agent, or a broker acting for it, asks Vouch for approval.
+  description: |
+    Served on a Unix socket on the Vouch server, by default
+    `/run/vouch/broker.sock`. It is not reachable over the network: the socket
+    is mode 0660 with the group named by `[sockets] broker_group` (default
+    `vouch-broker`), so only members of that group can connect. There is no
+    other authentication; being able to open the socket is the credential.
+
+    Over curl: `curl --unix-socket /run/vouch/broker.sock http://vouch/v1/approvals/...`
+    (the host name in the URL is ignored).
+
+    **Flow.** Create an approval with your own `request_id`; Vouch pushes it to
+    the owner's paired phones. Long-poll `GET /v1/approvals/{request_id}?wait=30`
+    until `state` is no longer `pending`. Approve-once and always-allow both
+    mean "go ahead"; anything else means "don't". Creating the same request
+    again (same id, same fields) is safe, so retries after a dropped
+    connection are fine.
+
+    With the server's `credentials` module off, every `/v1` call answers 403
+    `module_disabled`.
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+# No auth scheme: the socket's file permissions are the credential.
+security: []
+servers:
+  - url: http://vouch
+    description: Over the Unix socket; the host name is ignored.
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Liveness and version.
+      responses:
+        "200":
+          description: Up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service, listener, version]
+                properties:
+                  ok: { type: boolean, const: true }
+                  service: { type: string, examples: ["approver"] }
+                  listener: { type: string, const: broker }
+                  version: { type: string, examples: ["0.3.3"] }
+        "404": { description: Not applicable; present for lint. }
+  /v1/approvals:
+    post:
+      operationId: createApproval
+      summary: Ask the owner to approve a sign-in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewApproval" }
+      responses:
+        "202":
+          description: Created (or the same request was already there). Pushed to the owner's phones.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "400":
+          description: A field is missing or invalid, or `expires_at` is not within the next hour.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/ModuleDisabled" }
+        "409":
+          description: The `request_id` is already used by a different request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/approvals/{request_id}:
+    parameters:
+      - $ref: "#/components/parameters/RequestId"
+    get:
+      operationId: getApproval
+      summary: The approval's state, optionally waiting for an answer.
+      parameters:
+        - name: wait
+          in: query
+          required: false
+          description: Seconds to wait for the state to leave `pending` before answering. 0 answers at once.
+          schema: { type: integer, minimum: 0, maximum: 30, default: 0 }
+      responses:
+        "200":
+          description: The approval, in its state at the time of the answer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Approval" }
+        "403": { $ref: "#/components/responses/ModuleDisabled" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/approvals/{request_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RequestId"
+    post:
+      operationId: cancelApproval
+      summary: Withdraw a pending request (the phones drop it).
+      responses:
+        "204": { description: Cancelled. }
+        "403": { $ref: "#/components/responses/ModuleDisabled" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Too late; the owner already answered or it timed out. The body carries the final state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - $ref: "#/components/schemas/Approval"
+  /v1/alerts:
+    post:
+      operationId: createAlert
+      summary: Tell the owner's phones about a problem.
+      description: |
+        For things the owner should know without being asked, such as the
+        credential broker's daily check finding a password in an agent's files.
+        The push carries only the alert's id; the app fetches the text. Sending
+        the same alert again is safe. At most ten alerts are accepted in an hour.
+        Never put a secret in the title or body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewAlert" }
+      responses:
+        "202":
+          description: Stored (or the same alert was already there) and pushed to the owner's phones.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alert_id, created_at]
+                properties:
+                  alert_id: { $ref: "#/components/schemas/RequestId" }
+                  created_at: { type: string, format: date-time }
+        "400":
+          description: A field is missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/ModuleDisabled" }
+        "409":
+          description: The `alert_id` is already used by a different alert.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: "`rate_limited`: too many alerts in the last hour."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+components:
+  parameters:
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/RequestId" }
+  responses:
+    NotFound:
+      description: No approval with that id (approvals are kept for 7 days).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ModuleDisabled:
+      description: "`module_disabled`: the server's credentials module is off."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    RequestId:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{8,64}$"
+      description: Chosen by you; unique per request. Reusing it for the same request is idempotent.
+      examples: ["req_7f3a9c2b1d4e"]
+    NewApproval:
+      type: object
+      additionalProperties: false
+      required: [request_id, kind, agent, site, expires_at]
+      properties:
+        request_id: { $ref: "#/components/schemas/RequestId" }
+        kind: { type: string, enum: [sign_in] }
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            The agent's display name, shown to the owner. One line of visible text:
+            control characters, line breaks and invisible or direction-changing
+            characters are refused, and so is a blank value.
+          examples: ["Research agent"]
+        site:
+          type: string
+          minLength: 1
+          maxLength: 253
+          description: |
+            The host the login is for, shown to the owner. A host name or an IP
+            address only: no scheme, port or path.
+          examples: ["example.com"]
+        login_title:
+          type: [string, "null"]
+          maxLength: 200
+          description: |
+            The login's name in your password manager. Never a username or
+            password. One line of visible text, as for `agent`.
+        expires_at:
+          type: string
+          format: date-time
+          description: When to stop waiting, at most one hour ahead. An unanswered request becomes `timeout`.
+    Approval:
+      type: object
+      required: [request_id, state, device_id, decided_at, push_sent_at, fetched_at]
+      properties:
+        request_id: { $ref: "#/components/schemas/RequestId" }
+        state:
+          type: string
+          enum: [pending, once, always, deny, timeout, cancelled]
+          description: "`once` and `always` mean approved; `always` also means the owner chose to allow this login from now on, which the broker records."
+        device_id:
+          type: [string, "null"]
+          description: The phone that answered.
+        decided_at:
+          type: [string, "null"]
+          format: date-time
+        push_sent_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the push reached Firebase.
+        fetched_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a phone first opened the request.
+    NewAlert:
+      type: object
+      additionalProperties: false
+      required: [alert_id, severity, title, body]
+      properties:
+        alert_id: { $ref: "#/components/schemas/RequestId" }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: One line of visible text, as for an approval's `agent`.
+          examples: ["A password is where an agent can read it"]
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Visible text. Line breaks are allowed; other control or invisible characters are refused.
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: ["bad_request", "not_found", "already_decided", "module_disabled"] }
+        message: { type: string }

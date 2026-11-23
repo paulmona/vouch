@@ -1,0 +1,89 @@
+#!/bin/bash
+# Restrict who on this machine can connect to each agent's Chrome DevTools port.
+#
+# The DevTools port has no authentication: anything that can open a TCP
+# connection to 127.0.0.1:<port> can drive the browser, and that browser holds
+# live signed-in sessions. Without this, every unix user on the machine can.
+# This loads an nftables table that rejects loopback connections to each port
+# in /etc/vouch-browser/ports from everyone but that port's agent and the
+# broker's user.
+#
+#   sudo vouch-cdp-guard load     # (re)load the rules from the ports file
+#   sudo vouch-cdp-guard status   # show the loaded table
+#
+# A line it cannot use does not stop the rest: the other ports are still
+# restricted, a port whose user does not exist is closed to everyone, and the
+# command exits non-zero so the unit shows as failed. After a successful load it
+# writes /run/vouch-browser/guarded ("port uid" per line). chrome-start and the
+# broker refuse a port that is not in it, so a guard that never loaded stops
+# sign-ins instead of leaving the ports open.
+#
+# Only this table is touched: there is no `flush ruleset`. Root is refused on
+# the ports too, but root can remove the table: this protects agents from each
+# other and from other unprivileged users, not from root.
+
+set -euo pipefail
+
+PORTS=${VOUCH_BROWSER_PORTS:-/etc/vouch-browser/ports}
+BROKER_USER=${VOUCH_BROKER_USER:-credbroker}
+STATE=${VOUCH_BROWSER_GUARDED:-/run/vouch-browser/guarded}
+TABLE=vouch_cdp
+
+die() { echo "cdp-guard: $*" >&2; exit 1; }
+say() { echo "cdp-guard: $*"; }
+
+warn() { echo "cdp-guard: $*" >&2; }
+
+# Prints the nftables rules for the ports file, one agent per line: "user port".
+# Returns 1 if any line could not be used as written.
+rules() {
+  local user port uid broker="" n=0 bad=0
+  broker=$(id -u "$BROKER_USER" 2>/dev/null) || warn "no $BROKER_USER user yet: run 'vouch-cdp-guard load' again once the broker is installed"
+  echo "table inet $TABLE {"
+  echo "  chain output {"
+  echo "    type filter hook output priority 0; policy accept;"
+  while read -r user port _; do
+    case "$user" in ''|'#'*) continue ;; esac
+    if ! { [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; }; then
+      warn "$PORTS: bad port for $user: $port (line skipped)"
+      bad=1
+      continue
+    fi
+    if uid=$(id -u "$user" 2>/dev/null); then
+      echo "    oifname \"lo\" tcp dport $port meta skuid { $uid${broker:+, $broker} } accept"
+      n=$((n + 1))
+    else
+      warn "$PORTS: no such user: $user (port $port closed to everyone)"
+      bad=1
+    fi
+    echo "    oifname \"lo\" tcp dport $port counter reject with tcp reset"
+  done < "$PORTS"
+  echo "  }"
+  echo "}"
+  [ "$n" -gt 0 ] || die "$PORTS lists no usable agents"
+  return "$bad"
+}
+
+load() {
+  [ -f "$PORTS" ] || die "no $PORTS (run browser/setup)"
+  local text bad=0
+  text=$(rules) || bad=$?
+  [ -n "$text" ] && grep -q ' accept$' <<<"$text" || exit 1
+  # One transaction: the old table goes and the new one arrives together, so
+  # there is no moment with the ports open.
+  { nft list table inet "$TABLE" >/dev/null 2>&1 && echo "delete table inet $TABLE"; echo "$text"; } | nft -f -
+  # What is now enforced, for chrome-start and the broker to check: "port uid".
+  install -d -m 0755 "$(dirname "$STATE")"
+  sed -n 's/.* tcp dport \([0-9]*\) meta skuid { \([0-9]*\)[,} ].*accept$/\1 \2/p' <<<"$text" > "$STATE.new"
+  chmod 0644 "$STATE.new"
+  mv -f "$STATE.new" "$STATE"
+  say "loaded: $(grep -c ' accept$' <<<"$text") port(s) restricted to their agent${BROKER_USER:+ and $BROKER_USER}"
+  [ "$bad" = 0 ] || die "some lines in $PORTS were not usable (see above); fix them, then: systemctl restart vouch-cdp-guard"
+}
+
+case "${1:-}" in
+  load) [ "$(id -u)" = 0 ] || die "must run as root"; load ;;
+  status) [ "$(id -u)" = 0 ] || die "must run as root"; nft list table inet "$TABLE" ;;
+  print) rules ;;
+  *) die "usage: vouch-cdp-guard load|status|print" ;;
+esac

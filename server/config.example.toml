@@ -1,0 +1,104 @@
+# Vouch approver configuration. Every key is optional; these are the defaults.
+
+[server]
+# Shown in the app after pairing. Defaults to the host name.
+# name = "home-server"
+
+[policy]
+# Decisions must be signed by a key that needs a fingerprint, face or PIN for
+# every use. Android proves it with key attestation; iOS can only assert it.
+require_user_auth = true
+
+[app]
+# The app API, for a reverse proxy or tunnel in front of it.
+host = "127.0.0.1"
+port = 8770
+# The address phones use to reach the app API (scheme and host only). It goes
+# into the pairing QR code, so `vouch setup-code` needs it.
+public_url = ""
+# Proxies allowed to report the client address (X-Forwarded-For), for the
+# per-address rate limit. Name cloudflared's address when it runs elsewhere,
+# or "127.0.0.1" when it runs on this host.
+trusted_proxies = []
+
+[sockets]
+# The broker creates and waits on approvals here. Access is by file permission:
+# the socket is mode 0660 with this group, so only its members can connect.
+# Leave broker_group empty to make it owner-only (0600), for development.
+broker = "/run/vouch/broker.sock"
+broker_group = "vouch-broker"
+# The vouch CLI (setup codes). Always owner-only (0600).
+admin = "/run/vouch/admin.sock"
+# Agents' SMS tools (only with modules.sms). Same model as the broker socket:
+# 0660 with this group, so membership decides which agent may text.
+sms = "/run/vouch/sms.sock"
+sms_group = "vouch-sms"
+
+[store]
+path = "/var/lib/vouch/vouch.db"
+
+[firebase]
+# The service account key (JSON) that sends pushes. Empty means no pushes,
+# which suits tests. To load it from Vault at start, see deploy/vault/README.md.
+service_account_file = ""
+
+[heartbeat]
+# A data push to every phone each interval; a phone that has not checked in
+# for longer than silent_after_hours is logged. An Android phone answers only
+# when the app is open, so for it this means "not opened", not "not reached".
+interval_hours = 24
+silent_after_hours = 48
+
+[modules]
+# Each install runs only what it needs. With credentials off, the broker socket
+# refuses approval calls. With sms off, nothing SMS-related exists. The app
+# reads these from GET /v1/server/modules and hides what is off.
+credentials = true
+sms = false
+
+[sms]
+# Only read when modules.sms is on. The provider's own settings go in a
+# section of their own, e.g. [sms.voipms].
+# provider = "voipms"
+# The owner's mobile: texts to it need no approval and count against
+# owner_daily_cap instead of daily_cap.
+# owner_phone = "+12045550150"
+# owner_name = "Alex"
+# The agent that texts, as the approval prompt names it.
+# agent_name = "Assistant"
+# A new-contact request from the agent waits this long for an answer in Vouch.
+approval_ttl_hours = 24
+max_pending_approvals = 3
+# Rolling 24-hour caps. Providers may suspend accounts that look automated,
+# and a cap bounds the damage of a manipulated send.
+daily_cap = 50
+owner_daily_cap = 30
+# Prefixed to a text when the agent hasn't texted that number for
+# intro_gap_days (and the text doesn't already introduce itself).
+# intro = "Hi, it's Alex's assistant. "
+# A text whose first 60 characters already contain this gets no intro.
+# intro_marker = "assistant"
+intro_gap_days = 7
+max_text = 1000
+
+[sms.voipms]
+# The agent's number, 10 digits. The API user and password come from the
+# environment (VOUCH_VOIPMS_USER, VOUCH_VOIPMS_API_PASSWORD), never this file,
+# and the account's API IP allow-list must include this host.
+# did = "6475550100"
+
+[sms.mqtt]
+# Incoming route A: the provider's webhook body, published to MQTT (for example
+# by a Home Assistant automation). A persistent session (fixed client_id, QoS 1) keeps texts
+# that arrive while Vouch is down. Permitted texts are relayed to agent_inbox.
+# The broker login comes from VOUCH_MQTT_USERNAME / VOUCH_MQTT_PASSWORD.
+# Empty url: no incoming texts.
+# url = "mqtt://homeassistant.local:1883"
+topic = "vouch/sms/inbound"
+client_id = "vouch-sms"
+# agent_inbox = "agents/assistant/inbox"
+sender = "sms"
+
+[log]
+# trace, debug, info, warn, error
+level = "info"

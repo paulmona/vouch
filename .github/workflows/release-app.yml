@@ -1,0 +1,206 @@
+# Signed Android release of the Vouch app.
+#
+# Tag `app-vX.Y.Z` on main -> a release APK signed with the upload key,
+# attached to a GitHub Release for that tag with its .sha256 and the signing
+# certificate's SHA-256 (check your installed app against it). The tag must match
+# `version:` in app/pubspec.yaml; versionCode is X*10000 + Y*100 + Z so it
+# always rises with the version.
+#
+# Secrets (set by the repo owner on the `release` environment, never committed, never
+# echoed): ANDROID_UPLOAD_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+# ANDROID_KEY_PASSWORD and GOOGLE_SERVICES_JSON_B64 (`base64 < google-services.json`).
+# No other workflow is given them. See app/README.md "Releases".
+name: release-app
+
+on:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-app-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_CHANNEL: stable
+  # Pinned: a floating stable broke CI when 3.50 deprecated package:flutter/material.dart.
+  # Move up deliberately (the material_ui migration is pending).
+  FLUTTER_VERSION: "3.44.2"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A repository setting, not this file, decides who may run this job: the `release`
+    # environment's reviewers and tag rules apply even to a tag whose workflow was edited.
+    environment: release
+    permissions:
+      contents: write   # to create the Release; nothing else
+    steps:
+      # Fails closed. Only the `release` environment, set up as docs/maintaining.md says,
+      # holds this variable. If the environment is missing GitHub makes an empty one when a
+      # tag is pushed, with no reviewer and no tag rule, and this job would publish with
+      # the built-in token alone.
+      - name: The release environment is set up
+        env:
+          READY: ${{ vars.RELEASE_ENV_READY }}
+        run: |
+          [ "$READY" = "true" ] || { echo "::error::The release environment is not set up (RELEASE_ENV_READY is not true). See docs/maintaining.md."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Version from the tag
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#app-v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' is not app-vX.Y.Z"; exit 1
+          fi
+          PUB=$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' app/pubspec.yaml)
+          if [ "$PUB" != "$VER" ]; then
+            echo "::error::tag version $VER does not match app/pubspec.yaml version $PUB"; exit 1
+          fi
+          # Before any step that is handed the signing key: only a commit that went through
+          # review on main gets a signed build.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$TAG is not on main"; exit 1; }
+          IFS=. read -r X Y Z <<<"$VER"
+          CODE=$(( X * 10000 + Y * 100 + Z ))
+          COMMIT=$(git rev-parse --short=7 HEAD)
+          {
+            echo "tag=$TAG"; echo "version=$VER"; echo "code=$CODE"; echo "commit=$COMMIT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Vouch app $VER (versionCode $CODE) at $COMMIT"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      # Before the signing key is on the runner: what is signed has passed the app's own checks.
+      - name: Analyze and tests
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      # Decoded into the runner's temp directory, mode 600, never printed.
+      - name: Materialise the keystore and Firebase config
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_UPLOAD_KEYSTORE_B64:?secret ANDROID_UPLOAD_KEYSTORE_B64 is not set}"
+          : "${GOOGLE_SERVICES_JSON_B64:?secret GOOGLE_SERVICES_JSON_B64 is not set}"
+          umask 077
+          printf '%s' "$ANDROID_UPLOAD_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/android/app/google-services.json
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build the signed release APK
+        working-directory: app
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VER: ${{ steps.ver.outputs.version }}
+          CODE: ${{ steps.ver.outputs.code }}
+          COMMIT: ${{ steps.ver.outputs.commit }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEYSTORE_PASSWORD:?}" "${ANDROID_KEY_ALIAS:?}" "${ANDROID_KEY_PASSWORD:?}"
+          flutter pub get
+          flutter build apk --release \
+            --build-name "$VER" --build-number "$CODE" \
+            --dart-define=VOUCH_COMMIT="$COMMIT"
+
+      # The APK itself is the thing checked, not the sources: signed by the
+      # upload key (not the debug key), and no cleartext allowance in the
+      # manifest (the debug exception for the LAN test server must not leak).
+      - name: Verify the signature and the cleartext policy
+        id: verify
+        run: |
+          set -euo pipefail
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          ls -l "$APK"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BT"
+          # Everything the checks look at is shown in the log, so a failure
+          # explains itself. The certificate lines are public information.
+          if ! "$BT/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/certs.txt; then
+            echo "::error::apksigner could not verify the APK (see above)"; exit 1
+          fi
+          # apksigner labels the line "Signer #1", "Signer (minSdkVersion=…)" or,
+          # verbose on build-tools 37, "V2 Signer"; match any of them, and never
+          # let a no-match abort the step before it can say so.
+          SHA=$(grep -E '^(V[0-9.]+ )?Signer.*certificate SHA-256 digest:' /tmp/certs.txt | head -1 | sed -E 's/.*digest: *//' || true)
+          if [ -z "$SHA" ]; then
+            echo "::error::no signer certificate found in apksigner output"; exit 1
+          fi
+          if grep -qi 'CN=Android Debug' /tmp/certs.txt; then
+            echo "::error::release APK is signed with the debug key"; exit 1
+          fi
+          "$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > /tmp/manifest.txt
+          grep -Ei 'networkSecurityConfig|usesCleartextTraffic|versionCode|versionName' /tmp/manifest.txt || true
+          if grep -Eiq 'networkSecurityConfig|usesCleartextTraffic' /tmp/manifest.txt; then
+            echo "::error::release manifest carries a cleartext allowance"; exit 1
+          fi
+          echo "cert_sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Signing certificate SHA-256: $SHA"
+
+      - name: Package
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/app/outputs/flutter-apk/app-release.apk "dist/vouch-$VER.apk"
+          (cd dist && sha256sum "vouch-$VER.apk" > "vouch-$VER.apk.sha256")
+          cat "dist/vouch-$VER.apk.sha256"
+
+      - name: Release notes
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.version }}
+          CODE: ${{ steps.ver.outputs.code }}
+          COMMIT: ${{ steps.ver.outputs.commit }}
+          CERT: ${{ steps.verify.outputs.cert_sha256 }}
+        run: |
+          set -euo pipefail
+          PREV=$(git describe --tags --match 'app-v*' --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)
+          RANGE=${PREV:+$PREV..}HEAD
+          {
+            echo "Vouch app $VER (versionCode $CODE, commit $COMMIT)."
+            echo
+            echo "Signing certificate SHA-256: \`$CERT\`"
+            echo
+            echo "Check before installing: \`sha256sum -c vouch-$VER.apk.sha256\`."
+            echo
+            if [ -n "$PREV" ]; then echo "## Changes since $PREV"; else echo "## Changes"; fi
+            echo
+            git log --no-merges --format='- %s (%h)' "$RANGE" -- app .github/workflows/release-app.yml
+          } > notes.md
+          cat notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* LICENSE NOTICE --title "Vouch app $VER" --notes-file notes.md --verify-tag

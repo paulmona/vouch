@@ -1,0 +1,52 @@
+# Vouch approver. Installed by deploy/install.sh prod <tag>.
+# Users: `vouch` runs the service; group `vouch-broker` holds vouch and
+# the broker's user, and is the only group allowed to connect to broker.sock.
+# Group `vouch-sms` holds vouch and the agents allowed to text (sms.sock); it
+# must exist before this unit starts.
+[Unit]
+Description=Vouch approver
+After=network.target
+
+[Service]
+Type=simple
+User=vouch
+Group=vouch
+SupplementaryGroups=vouch-broker vouch-sms
+# Secrets (VOUCH_* logins for the SMS module) from a root-owned file. The
+# Firebase key is a JSON file named in config.toml. To take both from
+# HashiCorp Vault instead, see deploy/vault/README.md.
+EnvironmentFile=-/etc/vouch/secrets.env
+ExecStart=/usr/bin/node /opt/vouch/prod/current/src/main.ts --config /etc/vouch/config.toml
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+# /run/vouch must be traversable by the broker; the sockets carry their own modes.
+RuntimeDirectory=vouch
+RuntimeDirectoryMode=0755
+StateDirectory=vouch
+StateDirectoryMode=0700
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# AF_NETLINK: listening on anything but one address makes Node list the
+# network interfaces, and the server does not start without it.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

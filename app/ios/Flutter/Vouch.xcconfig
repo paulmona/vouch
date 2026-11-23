@@ -1,0 +1,9 @@
+// App identity for the iOS build: the upstream bundle id and name. Put your
+// own values, and always your Apple team id, in VouchLocal.xcconfig next to
+// this file (gitignored); anything set there wins. See
+// docs/building-the-app.md.
+VOUCH_BUNDLE_ID = ai.viewbridge.vouch
+VOUCH_DEVELOPMENT_TEAM =
+VOUCH_DISPLAY_NAME = Vouch
+
+#include? "VouchLocal.xcconfig"

@@ -1,0 +1,82 @@
+# Builds and publishes a broker release when a broker-vX.Y.Z tag is pushed:
+# the bundle for broker/deploy/install.sh. There is no Docker image: the broker
+# identifies callers by unix user and types into Chrome on the same machine.
+name: release-broker
+
+on:
+  push:
+    tags: ["broker-v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-broker-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUFF: ruff@0.8.6
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A repository setting, not this file, decides who may run this job: the `release`
+    # environment's reviewers and tag rules apply even to a tag whose workflow was edited.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # Fails closed. Only the `release` environment, set up as docs/maintaining.md says,
+      # holds this variable. If the environment is missing GitHub makes an empty one when a
+      # tag is pushed, with no reviewer and no tag rule, and this job would publish with
+      # the built-in token alone.
+      - name: The release environment is set up
+        env:
+          READY: ${{ vars.RELEASE_ENV_READY }}
+        run: |
+          [ "$READY" = "true" ] || { echo "::error::The release environment is not set up (RELEASE_ENV_READY is not true). See docs/maintaining.md."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "broker/uv.lock"
+
+      - name: The tag names main's broker version
+        run: |
+          want=${GITHUB_REF_NAME#broker-v}
+          have=$(python3 -c 'import tomllib; print(tomllib.load(open("broker/pyproject.toml", "rb"))["project"]["version"])')
+          [ "$want" = "$have" ] || { echo "::error::$GITHUB_REF_NAME, but broker/pyproject.toml is $have"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+
+      - name: Lint, tests
+        working-directory: broker
+        run: |
+          uvx "$RUFF" check .
+          uv run --frozen pytest -q
+
+      # The wheel, requirements.txt with a hash for every dependency, the deploy
+      # files, and VERSION.
+      - name: Bundle
+        run: broker/deploy/bundle.sh dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${GITHUB_REF_NAME#broker-v}
+          prev=$(git tag -l 'broker-v*' --sort=-v:refname | grep -vxF "$GITHUB_REF_NAME" | head -1 || true)
+          {
+            echo "Broker $v, commit $GITHUB_SHA."
+            echo
+            echo "Install: \`broker/deploy/install.sh $GITHUB_REF_NAME\`"
+            echo
+            if [ -n "$prev" ]; then git log --format='- %s' "$prev..$GITHUB_SHA" -- broker; else git log --format='- %s' -- broker | head -50; fi
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "dist/credbroker-$v.tar.gz" "dist/credbroker-$v.tar.gz.sha256" \
+            --title "Broker $v" --notes-file notes.md --verify-tag

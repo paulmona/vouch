@@ -1,0 +1,4 @@
+#!/bin/sh
+# The vouch CLI for the LAN test instance, run as its user.
+exec sudo -u vouch-test /usr/bin/node /opt/vouch/test/current/src/cli.ts \
+  --socket /run/vouch-test/admin.sock --broker-socket /run/vouch-test/broker.sock "$@"

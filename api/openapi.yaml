@@ -1,0 +1,929 @@
+openapi: 3.1.0
+info:
+  title: Vouch app API
+  version: 0.3.0
+  summary: The contract between the Vouch mobile app and the Vouch server.
+  description: |
+    The mobile app talks to the Vouch server over HTTPS (behind a reverse
+    proxy, VPN or tunnel of the installer's choosing). Agents never call this
+    API; they, or a credential broker acting for them, talk to the server over
+    a local socket that is not part of this contract.
+
+    **Flow.** The broker asks the server for an approval. The server sends a
+    Firebase data message carrying only `kind` and an ID (see `PushData`). The
+    app fetches the request, shows it, asks for the fingerprint,
+    and posts a signed decision. The first valid decision wins; other devices
+    get a `clear` push and a 409 if they answer late.
+
+    **Two keys per device.** A key that needs a fingerprint for every use
+    can only sign while the fingerprint prompt is on screen, and the app
+    must make calls with nobody looking (heartbeat check-ins, push token
+    rotation, fetching a request when its push arrives). So each device
+    holds two P-256 keys, both created at pairing:
+
+    - The **decision key** (`public_key` at pairing) signs only
+      `POST /v1/requests/{request_id}/decision`. When the server policy
+      `require_user_auth` is true it needs user authentication for every
+      use, so no decision is ever signed without a fingerprint, face or PIN.
+    - The **transport key** (`transport_public_key` at pairing) needs no
+      user authentication and signs every other operation, including
+      `POST /v1/devices/pair` itself.
+
+    **Signing.** Every operation is signed, by the transport key except
+    for the decision, which the decision key signs. The device signs this
+    canonical string, the
+    five parts joined by a single `\n` (LF), no trailing newline:
+
+    ```
+    METHOD          upper case, e.g. POST
+    TARGET          path plus query string exactly as sent, e.g. /v1/requests/pending?limit=20
+    BODY_SHA256     lower-case hex SHA-256 of the exact body bytes sent (of "" when there is no body)
+    TIMESTAMP       Unix seconds, decimal string, same value as X-Vouch-Timestamp
+    NONCE           same value as X-Vouch-Nonce
+    ```
+
+    Signature: ECDSA P-256 over SHA-256 of the canonical string, DER
+    encoded, base64url without padding, in `X-Vouch-Signature`. Public keys
+    are SubjectPublicKeyInfo DER, base64url without padding.
+
+    The server rejects a request when: the timestamp is more than 60 seconds
+    from server time (`clock_skew`, with `server_time` in the error), the
+    nonce was already used by that device in the last 7 days
+    (`replayed_nonce`), the device is unknown or unpaired (`unknown_device`),
+    or the signature does not verify (`bad_signature`).
+
+    Test vectors: `api/test-vectors.json` (a throwaway test key).
+
+    **Keys.** Android: both keys in Keystore (StrongBox where available),
+    created with the attestation challenge set to SHA-256 of the setup
+    token's UTF-8 bytes (the raw 32-byte digest). The decision key requires
+    user authentication for every use (timeout 0) when `require_user_auth`
+    is true. iOS: both keys in the Secure Enclave, the decision key with
+    `.biometryCurrentSet`; iOS cannot attest this, so the server records the
+    device as `client_asserted`.
+
+    **Decision key proof.** At pairing the decision key also signs the
+    UTF-8 string `vouch-pair-v1\n` followed by the setup token (ECDSA P-256
+    over SHA-256, DER, base64url), sent as `decision_key_proof`. This proves
+    the device holds the decision key on both platforms, and on Android it
+    is the one fingerprint prompt during pairing.
+  contact:
+    name: Viewbridge
+    url: https://viewbridge.ai
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+servers:
+  - url: /
+    description: Relative to the server URL the app received in the pairing QR code.
+tags:
+  - name: devices
+    description: Pairing and the calling device itself.
+  - name: requests
+    description: Approval requests and decisions.
+  - name: alerts
+    description: Alerts pushed to the approver's devices.
+  - name: server
+    description: What this server runs.
+  - name: sms
+    description: |
+      The agent's text messages and the contacts it may text. Only present
+      when the server's `sms` module is on (see getModules); when it is off,
+      every `/v1/sms/*` path returns 404. Phone numbers are E.164 strings
+      (`+12045550150`); in a path they are percent-encoded (`%2B12045550150`).
+      Deleting here deletes only Vouch's copy; the SMS provider keeps its own.
+security:
+  - device: []
+    timestamp: []
+    nonce: []
+    signature: []
+
+webhooks:
+  firebasePush:
+    post:
+      operationId: firebasePush
+      summary: What the server sends to each device through Firebase (not an HTTP call to the app).
+      description: Documented here so both sides share one definition of the push payload. See PushData.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PushData" }
+      responses:
+        "200": { description: Delivered to Firebase. }
+        "400": { description: Not applicable; present for lint. }
+
+paths:
+  /v1/devices/pair:
+    post:
+      operationId: pairDevice
+      tags: [devices]
+      summary: Pair this device using a setup token from the QR code.
+      description: |
+        Signed with the transport key being registered: `X-Vouch-Device` is
+        omitted and the server verifies the signature against
+        `transport_public_key` in the body. `decision_key_proof` proves the
+        device holds the decision key. On Android the decision key's
+        attestation chain must chain to a Google root, carry the challenge
+        SHA-256(setup_token), and (when policy requires it) show the key
+        requires user authentication for every use. The setup token is
+        single use and valid for 10 minutes.
+
+        The pairing QR code holds the link
+        `vouch://pair?v=1&server=<server URL>&token=<setup token>` (query
+        values URL-encoded). `server` is the base URL for every call in this
+        API, e.g. `https://vouch.example.com`. The same link can be typed or
+        pasted by hand.
+      security:
+        - timestamp: []
+          nonce: []
+          signature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PairRequest" }
+      responses:
+        "201":
+          description: Paired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PairResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: "Attestation refused (`attestation_failed`) or the key does not meet the user-auth policy (`policy_requires_user_auth`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/devices/me:
+    get:
+      operationId: getDevice
+      tags: [devices]
+      summary: This device's record and the current server policy.
+      responses:
+        "200":
+          description: The calling device.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Device" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/devices/me/push-token:
+    put:
+      operationId: updatePushToken
+      tags: [devices]
+      summary: Replace this device's Firebase token after Firebase rotates it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [push_token]
+              properties:
+                push_token: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        "204": { description: Updated. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/devices/me/checkin:
+    post:
+      operationId: checkIn
+      tags: [devices]
+      summary: Answer a heartbeat push.
+      description: Shows the path works (Firebase in, tunnel out) when the app answers. On Android the answer can wait until the app is next opened, so a late or missing check-in does not by itself mean the path is broken. Also call it whenever the app opens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                heartbeat_id:
+                  type: [string, "null"]
+                  description: The ID from the heartbeat push, or null for an app-open check-in.
+      responses:
+        "204": { description: Recorded. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/requests/pending:
+    get:
+      operationId: listPendingRequests
+      tags: [requests]
+      summary: Open requests, newest first.
+      description: Call on app launch and resume, so a missed push never means a missed request.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Pending requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: { $ref: "#/components/schemas/ApprovalRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/requests/{request_id}:
+    parameters:
+      - $ref: "#/components/parameters/RequestId"
+    get:
+      operationId: getRequest
+      tags: [requests]
+      summary: One request, by the ID from the push.
+      description: The first fetch per device is recorded as that device's `fetched_at`.
+      responses:
+        "200":
+          description: The request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApprovalRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/requests/{request_id}/decision:
+    parameters:
+      - $ref: "#/components/parameters/RequestId"
+    post:
+      operationId: decideRequest
+      tags: [requests]
+      summary: Approve once, always allow, or deny.
+      description: |
+        Signed by the **decision key**, not the transport key. The first
+        valid decision from any paired device wins. `always` is only valid
+        for `sign_in` requests. The decision is bound to this request by the
+        signed path and body, and to what the owner saw by `shown_digest`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecisionRequest" }
+      responses:
+        "200":
+          description: Decision recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApprovalRequest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Too late: `already_decided` (another device or this one answered first) or `expired`; the body carries the request in its final state. Or `shown_mismatch`: `shown_digest` does not match the request, which stays pending; the body carries it as the server has it, to show again."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConflictError" }
+        "422":
+          description: "`decision_not_allowed`, for example `always` on an `sms_contact` request."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/alerts:
+    get:
+      operationId: listAlerts
+      tags: [alerts]
+      summary: Alerts from the last 30 days, newest first.
+      responses:
+        "200":
+          description: The alerts. Empty when there are none.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alerts]
+                properties:
+                  alerts:
+                    type: array
+                    items: { $ref: "#/components/schemas/Alert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/alerts/{alert_id}:
+    parameters:
+      - name: alert_id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Id" }
+    get:
+      operationId: getAlert
+      tags: [alerts]
+      summary: The details behind an `alert` push.
+      responses:
+        "200":
+          description: The alert.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Alert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/server/modules:
+    get:
+      operationId: getModules
+      tags: [server]
+      summary: Which optional modules this server runs.
+      description: Call after pairing and on app open; show only the tabs and request kinds whose module is on.
+      responses:
+        "200":
+          description: The module switches.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Modules" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/conversations:
+    get:
+      operationId: listSmsConversations
+      tags: [sms]
+      summary: One row per phone number, most recent activity first.
+      responses:
+        "200":
+          description: Conversations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversations]
+                properties:
+                  conversations:
+                    type: array
+                    items: { $ref: "#/components/schemas/SmsConversation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/conversations/{phone}:
+    parameters:
+      - $ref: "#/components/parameters/Phone"
+    delete:
+      operationId: deleteSmsConversation
+      tags: [sms]
+      summary: Delete every message with this number.
+      description: Hard delete from Vouch only. The contact, if permitted, stays permitted.
+      responses:
+        "204": { description: Deleted (also when there was nothing to delete). }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/conversations/{phone}/messages:
+    parameters:
+      - $ref: "#/components/parameters/Phone"
+    get:
+      operationId: listSmsMessages
+      tags: [sms]
+      summary: One conversation, newest first, paged.
+      description: |
+        Without `before`, returns the newest page and marks the conversation
+        read (its `unread_count` drops to 0). With `before`, returns the page
+        of messages older than that message and changes nothing.
+      parameters:
+        - name: before
+          in: query
+          required: false
+          description: A message_id from the previous page's `next_before`.
+          schema: { $ref: "#/components/schemas/Id" }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: A page of messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, next_before]
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: "#/components/schemas/SmsMessage" }
+                  next_before:
+                    description: Pass as `before` for the next older page; null when there are no older messages.
+                    oneOf:
+                      - $ref: "#/components/schemas/Id"
+                      - type: "null"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/messages/delete:
+    post:
+      operationId: deleteSmsMessages
+      tags: [sms]
+      summary: Delete selected messages.
+      description: Hard delete from Vouch only. Unknown ids are ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message_ids]
+              properties:
+                message_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  uniqueItems: true
+                  items: { $ref: "#/components/schemas/Id" }
+      responses:
+        "200":
+          description: How many were deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: integer, minimum: 0 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/contacts:
+    get:
+      operationId: listSmsContacts
+      tags: [sms]
+      summary: The numbers the agent may text, by name.
+      responses:
+        "200":
+          description: Permitted contacts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contacts]
+                properties:
+                  contacts:
+                    type: array
+                    items: { $ref: "#/components/schemas/SmsContact" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      operationId: addSmsContact
+      tags: [sms]
+      summary: Permit the agent to text a contact the owner picked.
+      description: |
+        Signed by the **decision key** (fingerprint or Face ID), like a
+        decision. Send the number as the contact picker gave it; the server
+        normalises it to E.164 and refuses numbers it can't (`invalid_number`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [phone, name]
+              properties:
+                phone: { type: string, minLength: 3, maxLength: 32, examples: ["(204) 555-0150"] }
+                name: { type: string, minLength: 1, maxLength: 64, examples: ["Sam"] }
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmsContact" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`contact_exists`: that number is already permitted."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmsError" }
+        "422":
+          description: "`invalid_number`: the server can't turn this into an E.164 number. The message says why. `policy_requires_user_auth` as for decisions."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmsError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sms/contacts/{phone}:
+    parameters:
+      - $ref: "#/components/parameters/Phone"
+    delete:
+      operationId: removeSmsContact
+      tags: [sms]
+      summary: Stop the agent texting this number.
+      description: Signed by the **decision key**. Takes effect on the agent's next send (refused as not approved). History is kept.
+      responses:
+        "204": { description: Removed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: "`policy_requires_user_auth`, as for decisions."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmsError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+components:
+  securitySchemes:
+    device:
+      type: apiKey
+      in: header
+      name: X-Vouch-Device
+      description: The device_id returned at pairing.
+    timestamp:
+      type: apiKey
+      in: header
+      name: X-Vouch-Timestamp
+      description: Unix seconds as a decimal string; within 60 s of server time.
+    nonce:
+      type: apiKey
+      in: header
+      name: X-Vouch-Nonce
+      description: 16 random bytes, base64url without padding (22 characters). Never reused.
+    signature:
+      type: apiKey
+      in: header
+      name: X-Vouch-Signature
+      description: ECDSA P-256 / SHA-256 signature of the canonical string, DER, base64url without padding.
+
+  parameters:
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+
+    Phone:
+      name: phone
+      in: path
+      required: true
+      description: E.164. Send it percent-encoded (`%2B12045550150`); the server also accepts a literal `+` and never reads `+` in a path as a space.
+      schema: { $ref: "#/components/schemas/Phone" }
+
+  responses:
+    BadRequest:
+      description: "Malformed body or parameters (`bad_request`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: "Signature checks failed: `bad_signature`, `clock_skew`, `replayed_nonce`, `unknown_device`, or for pairing `invalid_setup_token`."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "No such request, alert, conversation or contact (`not_found`), or the module serving this path is off."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: "Too many requests (`rate_limited`). Retry after the `Retry-After` header."
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Id:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{8,64}$"
+      examples: ["3f9c2a7b1d4e8f60"]
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339, UTC.
+      examples: ["2026-11-04T17:40:00Z"]
+
+    Platform:
+      type: string
+      enum: [android, ios]
+
+    Phone:
+      type: string
+      description: E.164.
+      pattern: "^\\+[1-9][0-9]{6,14}$"
+      examples: ["+12045550150"]
+
+    Modules:
+      type: object
+      required: [credentials, sms]
+      properties:
+        credentials:
+          type: boolean
+          description: Password-manager sign-in approvals (`sign_in` requests).
+        sms:
+          type: boolean
+          description: The SMS tab, `/v1/sms/*`, `sms_contact` requests and `sms_updated` pushes.
+
+    SmsMessage:
+      type: object
+      required: [message_id, phone, direction, text, at, status]
+      properties:
+        message_id: { $ref: "#/components/schemas/Id" }
+        phone: { $ref: "#/components/schemas/Phone" }
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        text: { type: string }
+        at:
+          description: When it was received, or sent by the agent.
+          $ref: "#/components/schemas/Timestamp"
+        status:
+          type: string
+          enum: [received, sent, failed]
+          description: "`received` for inbound. Outbound is `sent` once the provider accepted it, `failed` if it refused."
+
+    SmsConversation:
+      type: object
+      required: [phone, contact_name, last_message, unread_count]
+      properties:
+        phone: { $ref: "#/components/schemas/Phone" }
+        contact_name:
+          type: [string, "null"]
+          description: The permitted contact's name, or null for a number that is not (or no longer) permitted.
+        last_message: { $ref: "#/components/schemas/SmsMessage" }
+        unread_count: { type: integer, minimum: 0 }
+
+    SmsContact:
+      type: object
+      required: [phone, name, added_at, added_by]
+      properties:
+        phone: { $ref: "#/components/schemas/Phone" }
+        name: { type: string, examples: ["Sam"] }
+        added_at: { $ref: "#/components/schemas/Timestamp" }
+        added_by:
+          type: string
+          enum: [owner, agent_request, import]
+          description: "`owner`: picked in the app. `agent_request`: an approved `sms_contact` request. `import`: carried over from before Vouch owned SMS."
+
+    Policy:
+      type: object
+      required: [require_user_auth]
+      properties:
+        require_user_auth:
+          type: boolean
+          description: When true, decisions must be signed by a key that needs a fingerprint or face for every use. Default true.
+
+    PairRequest:
+      type: object
+      additionalProperties: false
+      required: [setup_token, public_key, attestation_chain, decision_key_proof, transport_public_key, push_token, name, platform]
+      properties:
+        setup_token: { type: string, minLength: 16, maxLength: 128 }
+        public_key:
+          type: string
+          description: The decision key. P-256 SubjectPublicKeyInfo DER, base64url without padding.
+        attestation_chain:
+          type: array
+          description: The decision key's Android key attestation certificates, leaf first, each DER base64url. Empty on iOS.
+          maxItems: 10
+          items: { type: string }
+        decision_key_proof:
+          type: string
+          description: "The decision key's signature over the UTF-8 string `vouch-pair-v1\\n` + setup_token: ECDSA P-256 / SHA-256, DER, base64url without padding."
+        transport_public_key:
+          type: string
+          description: The transport key, which signs every call except decisions. P-256 SubjectPublicKeyInfo DER, base64url without padding. Must differ from public_key.
+        transport_attestation_chain:
+          type: array
+          description: Optional Android attestation of the transport key (same rules as attestation_chain, no user-auth requirement). Omit or leave empty on iOS.
+          maxItems: 10
+          items: { type: string }
+        push_token: { type: string, minLength: 1, maxLength: 4096 }
+        name: { type: string, minLength: 1, maxLength: 64, examples: ["Pixel 9"] }
+        platform: { $ref: "#/components/schemas/Platform" }
+
+    PairResponse:
+      type: object
+      required: [device_id, server_name, policy, user_auth_bound]
+      properties:
+        device_id: { $ref: "#/components/schemas/Id" }
+        server_name: { type: string, examples: ["home-server"] }
+        policy: { $ref: "#/components/schemas/Policy" }
+        user_auth_bound:
+          type: string
+          enum: [attested, client_asserted, none]
+          description: What the server knows about whether the decision key needs a fingerprint, face or PIN for every use.
+        push_enabled:
+          type: boolean
+          description: >-
+            False when this server sends no push notifications (it has no Firebase
+            service account). The app then shows requests only when it is opened.
+            Absent on servers older than this field: treat as true.
+
+    Device:
+      type: object
+      required: [device_id, name, platform, paired_at, user_auth_bound, policy]
+      properties:
+        device_id: { $ref: "#/components/schemas/Id" }
+        name: { type: string }
+        platform: { $ref: "#/components/schemas/Platform" }
+        paired_at: { $ref: "#/components/schemas/Timestamp" }
+        last_checkin_at:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        user_auth_bound:
+          type: string
+          enum: [attested, client_asserted, none]
+          description: Whether the decision key is known to need a fingerprint, face or PIN for every use.
+        policy: { $ref: "#/components/schemas/Policy" }
+        rekey_required:
+          type: boolean
+          description: True when the policy changed and this device's key no longer meets it; the app should re-pair.
+        push_enabled:
+          type: boolean
+          description: >-
+            False when this server sends no push notifications (it has no Firebase
+            service account). The app then shows requests only when it is opened.
+            Absent on servers older than this field: treat as true.
+
+    ApprovalRequest:
+      type: object
+      required: [request_id, kind, agent, site, created_at, expires_at, state]
+      properties:
+        request_id: { $ref: "#/components/schemas/Id" }
+        kind:
+          type: string
+          enum: [sign_in, sms_contact]
+          description: "`sign_in`: an agent wants to use a login. `sms_contact`: an agent asks to text someone new (only when the sms module is on); details in `sms_contact`."
+        agent:
+          type: string
+          description: Display name of the requesting agent, e.g. Research agent.
+          examples: ["Research agent"]
+        site:
+          type: string
+          description: Host the login is for (sign_in), or the E.164 number (sms_contact).
+          examples: ["example.com"]
+        login_title:
+          type: [string, "null"]
+          description: The login's title in the password manager. Never a username or password.
+          examples: ["Example"]
+        sms_contact:
+          description: Present only for `sms_contact` requests. Approving adds this contact; `always` is not allowed.
+          oneOf:
+            - type: object
+              required: [phone, name, reason]
+              properties:
+                phone: { $ref: "#/components/schemas/Phone" }
+                name: { type: string, examples: ["Sam"] }
+                reason:
+                  type: string
+                  description: "The agent's stated reason, shown as written."
+                  examples: ["You asked me to confirm Tuesday's dinner with Sam."]
+            - type: "null"
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+        expires_at: { $ref: "#/components/schemas/Timestamp" }
+        state:
+          type: string
+          enum: [pending, once, always, deny, timeout, cancelled]
+        decided_at:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        decided_by:
+          type: [string, "null"]
+          enum: [this_device, other_device, null]
+          description: Who decided, from the calling device's point of view.
+
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, shown_digest]
+      properties:
+        decision:
+          type: string
+          enum: [once, always, deny]
+        shown_digest:
+          description: |
+            Lower-case hex SHA-256 of what the app displayed for this request,
+            so the signed decision is bound to the details the owner saw and
+            not only to the request id. Compute it from the values rendered on
+            screen, not from a new fetch. The digest is over the UTF-8 bytes of
+            `vouch-shown-v1\n` followed by one line per field, in this order:
+            `request_id`, `kind`, `agent`, `site`, `login_title`, `expires_at`,
+            `sms_phone`, `sms_name`, `sms_reason` (the last three from
+            `sms_contact`; null when the request has none). A line is
+            `name=<length>:<value>\n`, where length is the value's UTF-8 byte
+            count in decimal, or `name=-\n` when the value is null. Values are
+            the exact strings the server sent. Test vectors: `shown_digest` in
+            `api/test-vectors.json`.
+
+            Required: a decision without it is refused with 400. When it does
+            not match the server's record the answer is refused with
+            `shown_mismatch` and the request stays pending. A request that is
+            already decided or expired answers `already_decided` or `expired`
+            whatever the digest.
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+
+    Alert:
+      type: object
+      required: [alert_id, severity, title, body, created_at]
+      properties:
+        alert_id: { $ref: "#/components/schemas/Id" }
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        title: { type: string, examples: ["A password is where an agent can read it"] }
+        body: { type: string, examples: ["research/Example login (password) in /home/research/notes.md"] }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - bad_request
+            - bad_signature
+            - clock_skew
+            - replayed_nonce
+            - unknown_device
+            - invalid_setup_token
+            - attestation_failed
+            - policy_requires_user_auth
+            - not_found
+            - already_decided
+            - expired
+            - decision_not_allowed
+            - rate_limited
+        message: { type: string, description: "Plain English, safe to show to the user." }
+        server_time:
+          description: Present on clock_skew.
+          $ref: "#/components/schemas/Timestamp"
+
+    SmsError:
+      description: Errors only the SMS endpoints return, kept apart from Error so older apps never meet an unknown code.
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [invalid_number, contact_exists, policy_requires_user_auth]
+        message: { type: string, description: "Plain English, safe to show to the user." }
+
+    ConflictError:
+      description: The 409 from a decision. Its codes are kept apart from Error so no other operation is said to return them.
+      type: object
+      required: [code, message, request]
+      properties:
+        code:
+          type: string
+          enum:
+            - already_decided
+            - expired
+            - shown_mismatch
+        message: { type: string, description: "Plain English, safe to show to the user." }
+        request: { $ref: "#/components/schemas/ApprovalRequest" }
+
+    PushData:
+      description: |
+        Not an HTTP body. The Firebase data message the server sends
+        (high priority, data only, all values strings). Never contains an
+        agent, site or login: the app fetches those over this API.
+
+        - `request` + `request_id`: notify about the request (Android: an urgent notification; iOS: a time-sensitive notification); a tap opens it.
+        - `clear` + `request_id`: dismiss that request; another device answered or it ended.
+        - `heartbeat` + `heartbeat_id`: no visible notification; call checkIn.
+        - `alert` + `alert_id`: visible notification; fetch details with getAlert.
+        - `sms_updated`: no visible notification, no ID (a number is never sent through Firebase); refetch listSmsConversations and any open thread. Only when the sms module is on.
+      type: object
+      required: [v, kind]
+      properties:
+        v: { type: string, const: "1" }
+        kind: { type: string, enum: [request, clear, heartbeat, alert, sms_updated] }
+        request_id: { $ref: "#/components/schemas/Id" }
+        heartbeat_id: { $ref: "#/components/schemas/Id" }
+        alert_id: { $ref: "#/components/schemas/Id" }

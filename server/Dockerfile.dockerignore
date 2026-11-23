@@ -1,0 +1,8 @@
+# The image is built from the top of the repository. Only these go to the build.
+*
+!server/package.json
+!server/package-lock.json
+!server/src
+!server/migrations
+!LICENSE
+!NOTICE

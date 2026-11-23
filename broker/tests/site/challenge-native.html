@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Challenge (native select)</title></head>
+<body>
+<form id="f">
+  <select id="q"><option>Choose a question</option><option>What was your first car?</option><option>Name of your first pet?</option></select>
+  <input type="password" name="answer">
+  <button type="submit">Verify</button>
+</form>
+<script>
+  document.getElementById('f').addEventListener('submit', ev => {
+    ev.preventDefault();
+    if (document.getElementById('q').value === 'What was your first car?' && document.querySelector('[name=answer]').value === 'Corolla') location.href = 'home.html';
+  });
+</script>
+</body></html>

@@ -1,0 +1,63 @@
+# Vouch with Docker Compose. See README.md in this folder. In short: copy this
+# folder, edit config.toml, put your Firebase service account key next to it as
+# firebase.json, set VOUCH_VERSION in .env, then:
+#
+#   docker compose up -d                      # Vouch only, on 127.0.0.1:8770
+#   docker compose --profile caddy up -d      # plus Caddy for HTTPS on 443
+#   docker compose exec vouch vouch setup-code
+#
+# Image: ghcr.io/paulmona/vouch-server, one tag per server release.
+services:
+  vouch:
+    image: ghcr.io/paulmona/vouch-server:${VOUCH_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - ./config.toml:/etc/vouch/config.toml:ro
+      - ./firebase.json:/etc/vouch/firebase.json:ro
+      - vouch-data:/var/lib/vouch
+      # The agent sockets (broker.sock, sms.sock). Bind it to a host folder,
+      # e.g. ./run:/run/vouch, if a broker or agent outside Docker connects.
+      - vouch-run:/run/vouch
+    # The SMS module's logins (VOUCH_*), if you use it. See secrets.env.example.
+    env_file:
+      - path: ./secrets.env
+        required: false
+    # group_add: ["<host gid of your broker's group>"]   # with [sockets] broker_group
+    # Host side only: change the first 8770 to use another host port, or drop
+    # 127.0.0.1 to reach Vouch from your network over plain HTTP (testing only).
+    ports:
+      - "127.0.0.1:8770:8770"
+    networks:
+      default:
+        ipv4_address: 10.87.70.3
+
+  caddy:
+    profiles: ["caddy"]
+    image: caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9
+    restart: unless-stopped
+    environment:
+      # The hostname phones use; required with --profile caddy.
+      VOUCH_DOMAIN: ${VOUCH_DOMAIN:-}
+    ports:
+      - "443:443"
+    # Fixed, so Vouch can trust this one address to report the client's
+    # (config.toml, [app] trusted_proxies).
+    networks:
+      default:
+        ipv4_address: 10.87.70.2
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+# A fixed subnet so Caddy's address is known. If it clashes with a network you
+# use, change it here, in the two ipv4_address lines and in config.toml.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.87.70.0/29
+
+volumes:
+  vouch-data:
+  vouch-run:
+  caddy-data:

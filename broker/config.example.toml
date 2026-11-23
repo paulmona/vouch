@@ -1,0 +1,60 @@
+# credbroker configuration. Copy to /etc/credbroker/config.toml, or point the
+# CREDBROKER_CONFIG environment variable at another path. The broker does not
+# start without this file.
+
+# Who may use the broker. The table name is the agent's unix user: a caller is
+# identified by the uid on the other end of the socket, and anyone not listed
+# here is refused. A listed user that does not exist on this machine is skipped
+# with a warning.
+#
+#   op_token_key  name of the secret that holds this agent's 1Password service
+#                 account token. Give each agent its own 1Password vault and a
+#                 service account that can read only that vault. An agent
+#                 without this field has no logins.
+#   cdp_port      the agent's Chrome DevTools port, where sign-ins are typed.
+#   admin         true if the agent may list and revoke every agent's standing
+#                 approvals. Default false.
+
+[agents.research]
+op_token_key = "OP_TOKEN_RESEARCH"
+cdp_port = 9222
+
+[agents.assistant]
+op_token_key = "OP_TOKEN_ASSISTANT"
+cdp_port = 9223
+admin = true
+
+# The daily leak check searches files for any password or security answer the
+# agents can use. This table is optional; the values below are the defaults.
+#
+#   roots        directories to search. Each entry is a path or a glob.
+#   canary_file  where `credbroker-leakcheck --canary` plants a fake secret to
+#                prove the check and its report work. It must be inside one of
+#                the roots. Unset by default, and --canary then refuses to run.
+
+[leakcheck]
+roots = ["/home/*/.claude", "/var/lib/credbroker"]
+# canary_file = "/var/lib/credbroker/leakcheck-canary.jsonl"
+
+# MQTT is optional and off unless this table has a url. When it is on, the
+# broker publishes one event per sign-in request and a heartbeat, and the leak
+# check publishes one event when it finds something. No event carries a
+# username or a password. The MQTT login, if the server needs one, goes in the
+# secrets as MQTT_USERNAME and MQTT_PASSWORD.
+#
+#   url           the MQTT server: mqtts://host for TLS (port 8883 unless you
+#                 give one; the certificate is checked against the system's
+#                 CAs), or mqtt://host (port 1883) on a network you trust,
+#                 where the login travels in the clear.
+#   event_topic   where events are published. Default "credbroker/events".
+#   status_topic  where the heartbeat is published and retained: "up" every
+#                 minute, "down" when the broker stops.
+#                 Default "credbroker/status".
+#   ha_discovery  true to announce the heartbeat to Home Assistant as a
+#                 connectivity sensor. Default false.
+
+# [mqtt]
+# url = "mqtt://broker.example:1883"
+# event_topic = "credbroker/events"
+# status_topic = "credbroker/status"
+# ha_discovery = false

@@ -1,0 +1,30 @@
+[Unit]
+Description=Credential broker: daily check that no secret appears in agent files
+After=network-online.target
+Wants=network-online.target
+# Whatever ends this unit as failed (an exit other than 0 or 3, the time limit,
+# the memory limit, a kill), the owner's phones are told by a second unit that
+# uses none of the check's code or packages.
+OnFailure=credbroker-leakcheck-failed.service
+
+[Service]
+Type=oneshot
+# Root: it has to read every agent's home. Read-only everywhere.
+# Secrets come from /etc/credbroker/secrets.env. To take them from HashiCorp
+# Vault instead, see deploy/vault/README.md.
+Environment=HOME=/root
+ExecStart=/opt/credbroker/current/venv/bin/credbroker-leakcheck
+ProtectSystem=strict
+ReadWritePaths=/root
+PrivateTmp=yes
+NoNewPrivileges=yes
+# 3 is "a leak was found" (the owner has been alerted). Anything else, 1 included, is the
+# check itself failing, and the unit shows as failed.
+SuccessExitStatus=3
+# The check gives up and alerts at 20 minutes; this is the backstop if it cannot.
+TimeoutStartSec=30min
+# The check holds one file at a time (at most 64 MiB) and a fixed number of
+# places of a fixed length per secret, so a run needs a small part of this. A run that passes it
+# is stopped here, with an alert, before it can take the machine's memory.
+MemoryMax=1G
+MemorySwapMax=0
