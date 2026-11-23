@@ -8,9 +8,8 @@ Vouch is a self-hosted system that gives an AI agent a real browser and a way
 to sign in to your accounts that you approve each time. The agent asks to sign
 in; your phone shows the request; you approve with your fingerprint or Face ID;
 the login is typed into the agent's browser straight from your 1Password. The
-broker never hands the password to the agent. An agent that goes looking in its
-own browser can still read it (see "Known limits" in
-[SECURITY.md](SECURITY.md)).
+broker never hands the password to the agent. See [SECURITY.md](SECURITY.md) for
+more details.
 
 Everything runs on your own server, next to your custom Claude agent(s).
 

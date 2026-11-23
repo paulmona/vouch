@@ -6,4 +6,10 @@ VOUCH_BUNDLE_ID = ai.viewbridge.vouch
 VOUCH_DEVELOPMENT_TEAM =
 VOUCH_DISPLAY_NAME = Vouch
 
+// Signing: Xcode manages it for a local build. tool/testflight.sh --ci sets these
+// in VouchLocal.xcconfig to sign by hand with a given certificate and profile.
+VOUCH_CODE_SIGN_STYLE = Automatic
+VOUCH_CODE_SIGN_IDENTITY = iPhone Developer
+VOUCH_PROFILE_SPECIFIER =
+
 #include? "VouchLocal.xcconfig"
