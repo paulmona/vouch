@@ -51,6 +51,7 @@ interface PairOpts {
   attest?: Partial<KeyOpts> | false;
   headers?: Record<string, string>;
   tamper?: boolean;
+  pushToken?: string | null;
 }
 
 // Pairs the way the app will: a decision key with its attestation chain (from a
@@ -76,7 +77,7 @@ async function pair(s: Setup, o: PairOpts) {
   const body = JSON.stringify({ setup_token: o.token, public_key: key.publicKey, attestation_chain: chain,
     decision_key_proof: proof(o.proofBy ?? key, o.token), transport_public_key: transport.publicKey,
     ...(transportChain ? { transport_attestation_chain: transportChain } : {}),
-    push_token: "fcm-token", name: "Test phone", platform: o.platform ?? "android" });
+    ...(o.pushToken === null ? {} : { push_token: o.pushToken ?? "fcm-token" }), name: "Test phone", platform: o.platform ?? "android" });
   const headers = { ...signedHeaders(transport.privateKey, "POST", "/v1/devices/pair", body), ...o.headers };
   const payload = o.tamper ? body.replace("Test phone", "Evil phone") : body;
   return s.app.inject({ method: "POST", url: "/v1/devices/pair", headers, payload });
@@ -255,4 +256,33 @@ test("setup codes carry a vouch:// pairing link, and need public_url", async () 
   assert.ok(lines.every((l) => !JSON.stringify(l).includes(r.setup_token)), "the token is never logged");
   const bare = setup({ publicUrl: "" });
   assert.equal((await bare.admin.inject({ method: "POST", url: "/v1/setup-codes" })).statusCode, 409);
+});
+
+// A published build of the app carries no Firebase config, so it has no push token to give.
+test("a phone with no push token pairs, is stored as having none, and can be given one later", async () => {
+  const s = setup();
+  const transport = deviceKey();
+  const r = await pair(s, { token: await newToken(s), transport, pushToken: null });
+  assert.equal(r.statusCode, 201, r.body);
+  const id = r.json().device_id;
+  assert.equal(s.devices.active(id)!.push_token, "");
+  assert.deepEqual(s.devices.pushable(), [], "a phone with no token is in the list of phones to push to");
+  const listed = (await s.admin.inject({ method: "GET", url: "/v1/devices" })).json();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].push, false);
+  assert.ok(!("push_token" in listed[0]));
+
+  const payload = JSON.stringify({ push_token: "a-real-token" });
+  const put = await s.app.inject({ method: "PUT", url: "/v1/devices/me/push-token", payload,
+    headers: { "x-vouch-device": id, ...signedHeaders(transport.privateKey, "PUT", "/v1/devices/me/push-token", payload) } });
+  assert.equal(put.statusCode, 204, put.body);
+  assert.deepEqual(s.devices.pushable().map((d) => d.push_token), ["a-real-token"]);
+  assert.equal((await s.admin.inject({ method: "GET", url: "/v1/devices" })).json()[0].push, true);
+});
+
+test("an empty push token is refused: a phone with none leaves the field out", async () => {
+  const s = setup();
+  const r = await pair(s, { token: await newToken(s), pushToken: "" });
+  assert.equal(r.statusCode, 400, r.body);
+  assert.equal(s.devices.list().length, 0);
 });

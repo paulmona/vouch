@@ -99,3 +99,22 @@ test("unpaired devices are never reported silent", async () => {
 test("the config refuses a silence window shorter than the interval", () => {
   assert.throws(() => parseConfig("[heartbeat]\ninterval_hours = 24\nsilent_after_hours = 12\n"), /silent_after_hours/);
 });
+
+// A phone with no push hears from the server only when its owner opens the app. Days
+// without that are ordinary, not a phone that has gone quiet.
+test("a phone with no push token is never reported silent, and one that gets a token is watched again", async () => {
+  const s = setup();
+  s.devices.unpair(s.d.device_id);
+  const quiet = s.devices.pair(s.devices.createSetupToken().token, { name: "published build", platform: "ios",
+    decision_key: deviceKey().publicKey, transport_key: deviceKey().publicKey, push_token: "", user_auth_bound: "client_asserted",
+    security_level: null })!;
+  const silent = () => s.lines.filter((l) => l.event === "device_silent");
+  s.advance(100 * HOUR);
+  await s.hb.tick();
+  assert.equal(silent().length, 0);
+  assert.equal(s.devices.get(quiet.device_id)!.silent_since, null);
+  s.devices.setPushToken(quiet.device_id, "now-it-has-one");
+  await s.hb.tick();
+  assert.equal(silent().length, 1);
+  assert.equal(silent()[0]!.device_id, quiet.device_id);
+});

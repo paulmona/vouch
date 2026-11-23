@@ -24,7 +24,7 @@ interface PairBody {
   decision_key_proof: string;
   transport_public_key: string;
   transport_attestation_chain?: string[];
-  push_token: string;
+  push_token?: string;
   name: string;
   platform: "android" | "ios";
 }
@@ -74,8 +74,9 @@ export function appRoutes(app: FastifyInstance, { config, approvals, devices, he
       body: {
         type: "object",
         additionalProperties: false,
+        // No push_token: a build of the app with no Firebase config. It pairs, and is never pushed to.
         required: ["setup_token", "public_key", "attestation_chain", "decision_key_proof", "transport_public_key",
-          "push_token", "name", "platform"],
+          "name", "platform"],
         properties: {
           setup_token: { type: "string", minLength: 16, maxLength: 128 },
           public_key: { type: "string", pattern: B64URL, maxLength: 512 },
@@ -147,7 +148,7 @@ export function appRoutes(app: FastifyInstance, { config, approvals, devices, he
         message: "This server requires a key that needs your fingerprint or PIN for every use." });
     }
     const d = devices.pair(b.setup_token, { name: b.name, platform: b.platform, decision_key: b.public_key,
-      transport_key: b.transport_public_key, push_token: b.push_token, user_auth_bound: bound, security_level: level });
+      transport_key: b.transport_public_key, push_token: b.push_token ?? "", user_auth_bound: bound, security_level: level });
     if (!d) return refuse(req, reply, 401, "invalid_setup_token", "This pairing code has expired or was already used. Make a new one.");
     return reply.code(201).send({ device_id: d.device_id, server_name: config.server.name,
       policy: { require_user_auth: config.policy.requireUserAuth }, user_auth_bound: d.user_auth_bound,

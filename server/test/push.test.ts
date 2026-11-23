@@ -96,3 +96,16 @@ test("sms_updated goes to every paired device with no id", async () => {
   assert.deepEqual(await s.push.smsUpdated(), ["sent", "sent"]);
   assert.ok(s.sent.every((x) => JSON.stringify(x.data) === JSON.stringify({ v: "1", kind: "sms_updated" }) && x.ttl === 300));
 });
+
+test("a phone paired with no push token is never pushed to", async () => {
+  const s = setup();
+  const a = s.add("a");
+  s.devices.pair(s.devices.createSetupToken().token, { name: "published build", platform: "ios", decision_key: deviceKey().publicKey,
+    transport_key: deviceKey().publicKey, push_token: "", user_auth_bound: "client_asserted", security_level: null })!;
+  const r = s.approval();
+  if (!("approval" in r)) throw new Error("not created");
+  await s.push.request(r.approval);
+  await s.push.heartbeat("hb_1");
+  assert.deepEqual(s.sent.map((x) => x.token), [a.push_token, a.push_token]);
+  assert.equal(s.lines.filter((l) => l.event === "push_failed" || l.event === "push_token_invalid").length, 0);
+});

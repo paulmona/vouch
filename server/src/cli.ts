@@ -79,8 +79,9 @@ try {
   } else if (command === "devices") {
     const r = await call("GET", "/v1/devices");
     if (r.body.length === 0) console.log("No devices paired.");
-    for (const d of r.body as Record<string, string>[]) {
-      console.log([d.device_id, d.name, d.platform, d.user_auth_bound, d.revoked_at ? `unpaired ${d.revoked_at}` : `paired ${d.paired_at}`].join("  "));
+    for (const d of r.body as Record<string, string | boolean>[]) {
+      console.log([d.device_id, d.name, d.platform, d.user_auth_bound, d.revoked_at ? `unpaired ${d.revoked_at}` : `paired ${d.paired_at}`,
+        ...(d.push === false ? ["no push"] : [])].join("  "));
     }
   } else if (command === "unpair" && arg) {
     const r = await call("POST", `/v1/devices/${encodeURIComponent(arg)}/unpair`);
