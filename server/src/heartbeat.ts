@@ -70,10 +70,11 @@ export class Heartbeat {
     }
   }
 
+  // A phone with no push token is left out: it is in touch only when its owner opens the app.
   #findSilent(): void {
     const cutoff = this.#iso(this.#now() - this.#cfg.silentAfterHours * HOUR);
     const silent = this.#db.prepare(`SELECT device_id, name, coalesce(last_checkin_at, paired_at) AS last_contact FROM devices
-      WHERE revoked_at IS NULL AND silent_since IS NULL AND coalesce(last_checkin_at, paired_at) < ?`).all(cutoff) as
+      WHERE revoked_at IS NULL AND silent_since IS NULL AND push_token != '' AND coalesce(last_checkin_at, paired_at) < ?`).all(cutoff) as
       { device_id: string; name: string; last_contact: string }[];
     for (const d of silent) {
       this.#db.prepare("UPDATE devices SET silent_since = ? WHERE device_id = ?").run(this.#iso(), d.device_id);

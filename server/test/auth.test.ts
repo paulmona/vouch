@@ -180,3 +180,11 @@ test("the alert list is newest first, and needs a signature", async () => {
   assert.deepEqual((r.json() as { alerts: { alert_id: string }[] }).alerts.map((a) => a.alert_id), ["alert_0002", "alert_0001"]);
   assert.equal((await s.get("/v1/alerts", {})).statusCode, 401);
 });
+
+test("push_enabled is false for a phone with no push token, and true once it has given one", async () => {
+  const s = setup(undefined, true, '[firebase]\nservice_account_file = "/etc/vouch/firebase.json"\n');
+  s.devices.setPushToken(s.d.device_id, "");
+  assert.equal((await s.get("/v1/devices/me", s.signed())).json().push_enabled, false);
+  s.devices.setPushToken(s.d.device_id, "a-token");
+  assert.equal((await s.get("/v1/devices/me", s.signed())).json().push_enabled, true);
+});

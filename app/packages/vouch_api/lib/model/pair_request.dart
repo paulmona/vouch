@@ -19,7 +19,7 @@ class PairRequest {
     required this.decisionKeyProof,
     required this.transportPublicKey,
     this.transportAttestationChain = const [],
-    required this.pushToken,
+    this.pushToken,
     required this.name,
     required this.platform,
   });
@@ -41,7 +41,8 @@ class PairRequest {
   /// Optional Android attestation of the transport key (same rules as attestation_chain, no user-auth requirement). Omit or leave empty on iOS.
   List<String> transportAttestationChain;
 
-  String pushToken;
+  /// The phone's Firebase push token. Leave the field out, or send null, when the app was built with no Firebase config and so has none: the phone pairs and is never sent a push, and its owner opens the app to see requests. An empty string is refused. A server older than API 0.4.0 refuses a pair request without a token.
+  String? pushToken;
 
   String name;
 
@@ -71,7 +72,7 @@ class PairRequest {
       (decisionKeyProof.hashCode) +
       (transportPublicKey.hashCode) +
       (transportAttestationChain.hashCode) +
-      (pushToken.hashCode) +
+      (pushToken == null ? 0 : pushToken!.hashCode) +
       (name.hashCode) +
       (platform.hashCode);
 
@@ -87,7 +88,11 @@ class PairRequest {
     json[r'decision_key_proof'] = this.decisionKeyProof;
     json[r'transport_public_key'] = this.transportPublicKey;
     json[r'transport_attestation_chain'] = this.transportAttestationChain;
-    json[r'push_token'] = this.pushToken;
+    if (this.pushToken != null) {
+      json[r'push_token'] = this.pushToken;
+    } else {
+      json[r'push_token'] = null;
+    }
     json[r'name'] = this.name;
     json[r'platform'] = this.platform;
     return json;
@@ -124,10 +129,6 @@ class PairRequest {
             'Required key "PairRequest[transport_public_key]" is missing from JSON.');
         assert(json[r'transport_public_key'] != null,
             'Required key "PairRequest[transport_public_key]" has a null value in JSON.');
-        assert(json.containsKey(r'push_token'),
-            'Required key "PairRequest[push_token]" is missing from JSON.');
-        assert(json[r'push_token'] != null,
-            'Required key "PairRequest[push_token]" has a null value in JSON.');
         assert(json.containsKey(r'name'),
             'Required key "PairRequest[name]" is missing from JSON.');
         assert(json[r'name'] != null,
@@ -156,7 +157,7 @@ class PairRequest {
                     .cast<String>()
                     .toList(growable: false)
                 : const [],
-        pushToken: mapValueOfType<String>(json, r'push_token')!,
+        pushToken: mapValueOfType<String>(json, r'push_token'),
         name: mapValueOfType<String>(json, r'name')!,
         platform: Platform.fromJson(json[r'platform'])!,
       );
@@ -220,7 +221,6 @@ class PairRequest {
     'attestation_chain',
     'decision_key_proof',
     'transport_public_key',
-    'push_token',
     'name',
     'platform',
   };
