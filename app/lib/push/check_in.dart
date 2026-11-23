@@ -62,7 +62,10 @@ class CheckInService {
     try {
       await api.devices.checkIn(CheckInRequest(heartbeatId: id));
       if (id != null) await prefs.remove(pendingKey);
-      await watchdog?.heard(serverName: paired.serverName);
+      // Without push, a day without contact is normal: nothing to re-arm.
+      if (paired.pushEnabled) {
+        await watchdog?.heard(serverName: paired.serverName);
+      }
       return true;
     } on ApiException catch (e) {
       debugPrint('Vouch: check-in refused (${e.code})');

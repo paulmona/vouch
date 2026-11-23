@@ -27,6 +27,10 @@ enum PairingError {
   /// Firebase has not issued a push token yet.
   noPushToken,
 
+  /// This build has no push and the server is too old to pair a phone
+  /// without a push token.
+  serverNeedsPush,
+
   /// The setup code expired or was already used.
   invalidToken,
 
@@ -68,17 +72,21 @@ class PairingService {
     required this.keys,
     required this.store,
     required this.pushToken,
+    bool Function()? pushAvailable,
     http.Client Function()? httpClient,
     DateTime Function()? now,
     bool? retryLocalNetwork,
     this.retryEvery = const Duration(seconds: 2),
     Future<void> Function(Uri server)? askLocalNetwork,
-  }) : _httpClient = httpClient ?? _defaultClient,
+  }) : pushAvailable = pushAvailable ?? _always,
+       _httpClient = httpClient ?? _defaultClient,
        _now = now ?? DateTime.now,
        _retryLocalNetwork = retryLocalNetwork ?? io.Platform.isIOS,
        _askLocalNetwork =
            askLocalNetwork ??
            (io.Platform.isIOS ? _askLocalNetworkIos : (_) async {});
+
+  static bool _always() => true;
 
   /// A connect that iOS holds back (Local Network not yet allowed) can hang
   /// for minutes; give up quickly so the retries below get their turn.
@@ -97,6 +105,10 @@ class PairingService {
 
   /// The current Firebase token, or null if none yet.
   final Future<String?> Function() pushToken;
+
+  /// False when this build has no Firebase config: it pairs without a push
+  /// token and is never sent a push.
+  final bool Function() pushAvailable;
   final http.Client Function() _httpClient;
   final DateTime Function() _now;
 
@@ -131,7 +143,8 @@ class PairingService {
   }) async {
     onStep?.call(PairingStep.creatingKeys);
     final token = await pushToken();
-    if (token == null || token.isEmpty) {
+    final hasToken = token != null && token.isNotEmpty;
+    if (!hasToken && pushAvailable()) {
       throw const PairingException(
         PairingError.noPushToken,
         "Push isn't ready yet. Check the connection and try again.",
@@ -212,7 +225,7 @@ class PairingService {
       transportAttestationChain: sendAttestation
           ? transport.attestationChain.map(b64).toList()
           : const [],
-      pushToken: token,
+      pushToken: hasToken ? token : null,
       name: deviceName,
       platform: io.Platform.isIOS ? Platform.ios : Platform.android,
     );
@@ -221,6 +234,7 @@ class PairingService {
     try {
       r = await _pairWithRetry(api, body, link.server);
     } on ApiException catch (e) {
+      if (!hasToken && _refusedMissingToken(e)) throw serverNeedsPushError;
       throw _fromApi(e);
     } on http.ClientException catch (e) {
       if (isAccessBlocked(e)) {
@@ -251,7 +265,9 @@ class PairingService {
       userAuthBound: r.userAuthBound.toString(),
       pairedAt: _now(),
       lastContactAt: _now(),
-      pushEnabled: r.pushEnabled ?? true,
+      // A phone paired without a token is never pushed to, whatever the
+      // server can do for others.
+      pushEnabled: (r.pushEnabled ?? true) && hasToken,
     );
     await store.save(paired);
     onStep?.call(PairingStep.done);
@@ -280,6 +296,25 @@ class PairingService {
         if (attempt >= retries || !_neverArrived(e)) rethrow;
       }
       await Future<void>.delayed(retryEvery);
+    }
+  }
+
+  static const serverNeedsPushError = PairingException(
+    PairingError.serverNeedsPush,
+    'This server is too old to pair a copy of Vouch without notifications. '
+    'Update the server, or build the app with your own Firebase project.',
+  );
+
+  /// A server from before API 0.4.0 requires push_token and says so in its
+  /// schema error.
+  static bool _refusedMissingToken(ApiException e) {
+    if (e.code != 400) return false;
+    try {
+      final j = jsonDecode(e.message ?? '') as Map<String, Object?>;
+      return j['code'] == 'bad_request' &&
+          (j['message'] as String? ?? '').contains('push_token');
+    } on Object {
+      return false;
     }
   }
 

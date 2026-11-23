@@ -214,6 +214,88 @@ void main() {
     expect(keys.signers, isEmpty);
   });
 
+  group('a build with no Firebase config', () {
+    test('pairs with no push token, and is saved as having no push', () async {
+      late http.Request seen;
+      final service = PairingService(
+        keys: FakeKeys(),
+        store: PairedDeviceStore(),
+        pushToken: () async => null,
+        pushAvailable: () => false,
+        httpClient: () => MockClient((r) async {
+          seen = r;
+          // A server that can push to others still pushes nothing here.
+          return ok({
+            'device_id': 'dev_0123456789',
+            'server_name': 'mac-dev',
+            'policy': {'require_user_auth': true},
+            'user_auth_bound': 'attested',
+            'push_enabled': true,
+          });
+        }),
+      );
+      final d = await service.pair(link, deviceName: 'x');
+      final body = jsonDecode(seen.body) as Map<String, Object?>;
+      expect(body['push_token'], isNull);
+      expect(d.pushEnabled, isFalse);
+      expect((await PairedDeviceStore().load())!.pushEnabled, isFalse);
+    });
+
+    test('a server too old to pair without a token says what to do', () async {
+      final service = PairingService(
+        keys: FakeKeys(),
+        store: PairedDeviceStore(),
+        pushToken: () async => null,
+        pushAvailable: () => false,
+        httpClient: () => MockClient(
+          (r) async => ok({
+            'code': 'bad_request',
+            'message': 'body/push_token must be string',
+          }, 400),
+        ),
+      );
+      await expectLater(
+        service.pair(link, deviceName: 'x'),
+        throwsA(
+          isA<PairingException>()
+              .having((e) => e.error, 'error', PairingError.serverNeedsPush)
+              .having(
+                (e) => e.message,
+                'message',
+                'This server is too old to pair a copy of Vouch without '
+                    'notifications. Update the server, or build the app '
+                    'with your own Firebase project.',
+              ),
+        ),
+      );
+    });
+
+    test('any other refusal is reported as the server said', () async {
+      final service = PairingService(
+        keys: FakeKeys(),
+        store: PairedDeviceStore(),
+        pushToken: () async => null,
+        pushAvailable: () => false,
+        httpClient: () => MockClient(
+          (r) async => ok({
+            'code': 'invalid_setup_token',
+            'message': 'This pairing code has expired.',
+          }, 401),
+        ),
+      );
+      await expectLater(
+        service.pair(link, deviceName: 'x'),
+        throwsA(
+          isA<PairingException>().having(
+            (e) => e.error,
+            'error',
+            PairingError.invalidToken,
+          ),
+        ),
+      );
+    });
+  });
+
   group('server errors map to PairingError', () {
     for (final (status, code, expected) in [
       (401, 'invalid_setup_token', PairingError.invalidToken),

@@ -99,15 +99,17 @@ class _PairScreenState extends ConsumerState<PairScreen> {
         // Give Firebase a moment if the token is still on its way.
         final push = PushService.instance;
         if (push.token != null) return push.token;
-        if (!push.available) return kDebugMode ? 'debug-no-fcm' : null;
+        if (!push.available) return null;
         try {
           return await push.onTokenRefresh.first.timeout(
             const Duration(seconds: 8),
           );
         } on Object {
-          return kDebugMode ? 'debug-no-fcm' : null;
+          return null;
         }
       },
+      // A build with no Firebase config pairs without notifications.
+      pushAvailable: () => PushService.instance.available,
     );
     try {
       final name = await AppSettings().deviceName();

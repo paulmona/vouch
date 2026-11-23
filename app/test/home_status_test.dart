@@ -10,6 +10,7 @@ import 'package:vouch/app.dart';
 import 'package:vouch/keys/device_key.dart';
 import 'package:vouch/pairing/device_session.dart';
 import 'package:vouch/pairing/paired_device.dart';
+import 'package:vouch/push/push_service.dart';
 import 'package:vouch_api/api.dart';
 
 import 'helpers/fake_keys.dart';
@@ -32,6 +33,7 @@ void main() {
     WidgetTester tester,
     Future<http.Response> Function(http.Request) handler, {
     bool decisionKey = true,
+    bool pushAvailable = true,
   }) async {
     SharedPreferences.setMockInitialValues({
       PairedDeviceStore.key: jsonEncode(paired.toJson()),
@@ -54,6 +56,7 @@ void main() {
         overrides: [
           deviceKeyStoreProvider.overrideWithValue(keys),
           httpClientProvider.overrideWithValue(() => MockClient(handler)),
+          pushAvailableProvider.overrideWithValue(pushAvailable),
         ],
         child: const VouchApp(),
       ),
@@ -94,6 +97,25 @@ void main() {
   testWidgets('a server without push: says to open the app', (tester) async {
     await open(tester, (r) => server(r, pushEnabled: false));
     expect(find.text(noPush), findsOneWidget);
+  });
+
+  testWidgets('a build without push: says so, and how to get it', (
+    tester,
+  ) async {
+    await open(
+      tester,
+      (r) => server(r, pushEnabled: false),
+      pushAvailable: false,
+    );
+    expect(
+      find.text(
+        'This copy of Vouch has no notifications. Open Vouch to check for '
+        'requests, or pull down to refresh. For notifications, build Vouch '
+        'with your own Firebase project.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text(noPush), findsNothing);
   });
 
   testWidgets('a server with push, or one that does not say: nothing', (
