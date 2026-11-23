@@ -126,9 +126,12 @@ step 2 are what hold.
 
 10. **The app's signing secrets.** On the `release` environment's page, under
     **Environment secrets**, add `ANDROID_UPLOAD_KEYSTORE_B64`,
-    `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`
-    and `GOOGLE_SERVICES_JSON_B64` (`app/README.md` says what each holds).
-    Store them as environment secrets only. If any of the five is listed
+    `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
+    `ANDROID_KEY_PASSWORD` (`app/README.md` says what each holds). There is
+    no Firebase secret: the published app is built with no Firebase config,
+    so that it does not register phones with your Firebase project. If an
+    earlier setup stored `GOOGLE_SERVICES_JSON` as a secret, delete it.
+    Store them as environment secrets only. If any of the four is listed
     under Settings > Secrets and variables > Actions > Repository secrets,
     delete it there: a repository secret can be read by any workflow.
 
