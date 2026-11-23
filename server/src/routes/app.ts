@@ -24,7 +24,7 @@ interface PairBody {
   decision_key_proof: string;
   transport_public_key: string;
   transport_attestation_chain?: string[];
-  push_token?: string;
+  push_token?: string | null;
   name: string;
   platform: "android" | "ios";
 }
@@ -74,7 +74,7 @@ export function appRoutes(app: FastifyInstance, { config, approvals, devices, he
       body: {
         type: "object",
         additionalProperties: false,
-        // No push_token: a build of the app with no Firebase config. It pairs, and is never pushed to.
+        // No push_token, or null: a build of the app with no Firebase config. It pairs, and is never pushed to.
         required: ["setup_token", "public_key", "attestation_chain", "decision_key_proof", "transport_public_key",
           "name", "platform"],
         properties: {
@@ -84,7 +84,7 @@ export function appRoutes(app: FastifyInstance, { config, approvals, devices, he
           decision_key_proof: { type: "string", pattern: B64URL, maxLength: 200 },
           transport_public_key: { type: "string", pattern: B64URL, maxLength: 512 },
           transport_attestation_chain: chainSchema,
-          push_token: { type: "string", minLength: 1, maxLength: 4096 },
+          push_token: { type: ["string", "null"], minLength: 1, maxLength: 4096 },
           name: { type: "string", minLength: 1, maxLength: 64 },
           platform: { type: "string", enum: ["android", "ios"] },
         },

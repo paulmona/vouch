@@ -77,7 +77,7 @@ async function pair(s: Setup, o: PairOpts) {
   const body = JSON.stringify({ setup_token: o.token, public_key: key.publicKey, attestation_chain: chain,
     decision_key_proof: proof(o.proofBy ?? key, o.token), transport_public_key: transport.publicKey,
     ...(transportChain ? { transport_attestation_chain: transportChain } : {}),
-    ...(o.pushToken === null ? {} : { push_token: o.pushToken ?? "fcm-token" }), name: "Test phone", platform: o.platform ?? "android" });
+    ...(o.pushToken === undefined ? { push_token: "fcm-token" } : o.pushToken === "absent" ? {} : { push_token: o.pushToken }), name: "Test phone", platform: o.platform ?? "android" });
   const headers = { ...signedHeaders(transport.privateKey, "POST", "/v1/devices/pair", body), ...o.headers };
   const payload = o.tamper ? body.replace("Test phone", "Evil phone") : body;
   return s.app.inject({ method: "POST", url: "/v1/devices/pair", headers, payload });
@@ -262,7 +262,7 @@ test("setup codes carry a vouch:// pairing link, and need public_url", async () 
 test("a phone with no push token pairs, is stored as having none, and can be given one later", async () => {
   const s = setup();
   const transport = deviceKey();
-  const r = await pair(s, { token: await newToken(s), transport, pushToken: null });
+  const r = await pair(s, { token: await newToken(s), transport, pushToken: "absent" });
   assert.equal(r.statusCode, 201, r.body);
   const id = r.json().device_id;
   assert.equal(s.devices.active(id)!.push_token, "");
@@ -285,4 +285,13 @@ test("an empty push token is refused: a phone with none leaves the field out", a
   const r = await pair(s, { token: await newToken(s), pushToken: "" });
   assert.equal(r.statusCode, 400, r.body);
   assert.equal(s.devices.list().length, 0);
+});
+
+// The generated app client cannot leave a field out: it sends null for one it has no value for.
+test("a null push token pairs the same way as none", async () => {
+  const s = setup();
+  const r = await pair(s, { token: await newToken(s), pushToken: null });
+  assert.equal(r.statusCode, 201, r.body);
+  assert.equal(s.devices.active(r.json().device_id)!.push_token, "");
+  assert.deepEqual(s.devices.pushable(), []);
 });

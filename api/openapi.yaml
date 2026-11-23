@@ -720,13 +720,14 @@ components:
           maxItems: 10
           items: { type: string }
         push_token:
-          type: string
+          type: [string, "null"]
           minLength: 1
           maxLength: 4096
           description: >-
-            The phone's Firebase push token. Leave the field out when the app was built with no Firebase config
-            and so has none: the phone pairs and is never sent a push, and its owner opens the app to see
-            requests. A server older than API 0.4.0 refuses a pair request without it.
+            The phone's Firebase push token. Leave the field out, or send null, when the app was built with no
+            Firebase config and so has none: the phone pairs and is never sent a push, and its owner opens the
+            app to see requests. An empty string is refused. A server older than API 0.4.0 refuses a pair request
+            without a token.
         name: { type: string, minLength: 1, maxLength: 64, examples: ["Pixel 9"] }
         platform: { $ref: "#/components/schemas/Platform" }
 
