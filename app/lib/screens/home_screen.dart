@@ -10,6 +10,7 @@ import '../keys/key_error_text.dart';
 import '../pairing/device_session.dart';
 import '../pairing/paired_device.dart';
 import '../platform/biometry.dart';
+import '../push/push_service.dart';
 import '../requests/decision_service.dart';
 import '../requests/request_kind.dart';
 import '../requests/request_providers.dart';
@@ -21,6 +22,15 @@ import 'sms/messages_tab.dart';
 /// Home: the paired server, last contact time and pending requests. When
 /// the server runs SMS a bottom bar adds Messages; with one module
 /// there is no bar at all.
+const noPushFromServerText =
+    'No notifications from this server. Open Vouch to check for requests, '
+    'or pull down to refresh.';
+
+const noPushInBuildText =
+    'This copy of Vouch has no notifications. Open Vouch to check for '
+    'requests, or pull down to refresh. For notifications, build Vouch '
+    'with your own Firebase project.';
+
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -201,8 +211,9 @@ class _PairedHome extends ConsumerWidget {
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
-                        'No notifications from this server. Open Vouch to '
-                        'check for requests, or pull down to refresh.',
+                        ref.watch(pushAvailableProvider)
+                            ? noPushFromServerText
+                            : noPushInBuildText,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: scheme.onSurfaceVariant,
                         ),
