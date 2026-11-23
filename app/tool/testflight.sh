@@ -18,9 +18,11 @@
 # file). It writes ios/Flutter/VouchLocal.xcconfig, so it refuses to run
 # where one exists.
 #
-# Either way the Firebase config comes from ios/Runner/GoogleService-Info.plist,
-# as for any build. The build number is X*10000 + Y*100 + Z, as on Android, so
-# each version uploads once. See README.md "iPhone releases (TestFlight)".
+# A Mac build carries the Firebase config in ios/Runner/GoogleService-Info.plist,
+# for the owner's own push. A --ci build is a published build and must carry
+# none: it refuses to run where that file exists, and fails if the archive
+# holds one. The build number is X*10000 + Y*100 + Z, as on Android, so each
+# version uploads once. See README.md "iPhone releases (TestFlight)".
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -60,6 +62,7 @@ if ! $DRY && [ -n "$(git status --porcelain)" ]; then
 fi
 
 LOCAL=ios/Flutter/VouchLocal.xcconfig
+FIREBASE=ios/Runner/GoogleService-Info.plist
 if $CI_MODE; then
   : "${VOUCH_DEVELOPMENT_TEAM:?set VOUCH_DEVELOPMENT_TEAM (the Apple team id)}"
   : "${IOS_PROFILE_NAME:?set IOS_PROFILE_NAME (the name of the App Store provisioning profile)}"
@@ -72,6 +75,7 @@ if $CI_MODE; then
     echo "$LOCAL exists; --ci writes its own and will not replace yours." >&2
     exit 1
   fi
+  [ ! -e "$FIREBASE" ] || { echo "$FIREBASE exists; a published build carries no Firebase config." >&2; exit 1; }
   [[ "$VOUCH_DEVELOPMENT_TEAM" =~ ^[A-Z0-9]{10}$ ]] || { echo "VOUCH_DEVELOPMENT_TEAM is not a 10-character team id." >&2; exit 1; }
   # An Apple Distribution identity of this team, with its private key, in a keychain codesign searches.
   IDENTITY=$(security find-identity -v -p codesigning \
@@ -106,8 +110,8 @@ else
   : "${ASC_ISSUER_ID:?set ASC_ISSUER_ID (see the top of this script)}"
   KEY="$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
   [ -f "$KEY" ] || { echo "Missing $KEY." >&2; exit 1; }
+  [ -f "$FIREBASE" ] || { echo "Missing $FIREBASE (see docs/building-the-app.md)." >&2; exit 1; }
 fi
-[ -f ios/Runner/GoogleService-Info.plist ] || { echo "Missing ios/Runner/GoogleService-Info.plist (see docs/building-the-app.md)." >&2; exit 1; }
 
 IFS=. read -r X Y Z <<<"$VER"
 BUILD=$(( X * 10000 + Y * 100 + Z ))
@@ -120,6 +124,11 @@ flutter build xcarchive --release \
   --dart-define=VOUCH_COMMIT="$COMMIT"
 ARCHIVE=build/ios/archive/Runner.xcarchive
 [ -d "$ARCHIVE" ] || { echo "No archive was built." >&2; exit 1; }
+if $CI_MODE; then
+  # What is signed and uploaded is this app. Nothing named like a Firebase config may be in it.
+  FOUND=$(find "$ARCHIVE/Products/Applications" -iname 'GoogleService-Info*.plist' -print -quit)
+  [ -z "$FOUND" ] || { echo "The archive carries a Firebase config ($FOUND); not exporting it." >&2; exit 1; }
+fi
 
 OPTS=$(mktemp -d)/ExportOptions.plist
 if $CI_MODE; then
