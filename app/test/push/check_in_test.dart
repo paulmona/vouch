@@ -10,6 +10,7 @@ import 'package:vouch/api/device_signer.dart';
 import 'package:vouch/keys/device_key.dart';
 import 'package:vouch/pairing/paired_device.dart';
 import 'package:vouch/push/check_in.dart';
+import 'package:vouch/push/contact_watchdog.dart';
 import 'package:vouch/push/notifications.dart';
 import 'package:vouch/push/push_handler.dart';
 
@@ -26,6 +27,21 @@ class _NoNotifier implements RequestNotifier {
   }) async {}
   @override
   Future<void> showAlert(String alertId, {String? title, String? body}) async {}
+}
+
+class _Reminders implements ReminderScheduler {
+  final scheduled = <int>[];
+
+  @override
+  Future<void> scheduleReminder({
+    required int id,
+    required DateTime at,
+    required String title,
+    required String body,
+  }) async => scheduled.add(id);
+
+  @override
+  Future<void> cancelReminder(int id) async {}
 }
 
 class _NoReceipts implements PushReceipts {
@@ -111,6 +127,25 @@ void main() {
     expect(EcdsaVerifier.fromSpki(transport).verify(msg, sig), isTrue);
     expect(EcdsaVerifier.fromSpki(decision).verify(msg, sig), isFalse);
   });
+
+  for (final (push, armed) in [(true, 1), (false, 0)]) {
+    test('a check-in re-arms the day-of-silence reminder only with push '
+        '(push $push)', () async {
+      SharedPreferences.setMockInitialValues({
+        PairedDeviceStore.key: jsonEncode(
+          paired.copyWith(pushEnabled: push).toJson(),
+        ),
+      });
+      final reminders = _Reminders();
+      final service = CheckInService(
+        keys: await keys(),
+        httpClient: () => MockClient((r) async => http.Response('', 204)),
+        watchdog: ContactWatchdog(scheduler: reminders),
+      );
+      expect(await service.checkIn(), isTrue);
+      expect(reminders.scheduled, hasLength(armed));
+    });
+  }
 
   test('an app-open check-in sends null', () async {
     http.Request? seen;

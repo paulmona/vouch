@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'alert_details.dart';
@@ -13,6 +14,12 @@ import 'contact_watchdog.dart';
 import 'notifications.dart';
 import 'push_event.dart';
 import 'push_handler.dart';
+
+/// False when this build has no Firebase config, so it gets no
+/// notifications whatever the server can do.
+final pushAvailableProvider = Provider<bool>(
+  (ref) => PushService.instance.available,
+);
 
 /// A tapped request notification: which request to open.
 typedef RequestOpen = ({String requestId});
